@@ -3,9 +3,11 @@
 
 import argparse
 import csv
+import json
 import math
 import random
 import time
+import urllib.request as _urllib_request
 from datetime import datetime
 
 import requests
@@ -17,6 +19,7 @@ import requests
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 WOLT_LISTINGS_URL = "https://restaurant-api.wolt.com/v1/pages/restaurants"
 WOLT_DYNAMIC_URL = "https://consumer-api.wolt.com/order-xp/web/v1/venue/slug/{slug}/dynamic"
+OSRM_URL = "http://router.project-osrm.org/route/v1/driving/{user_lon},{user_lat};{venue_lon},{venue_lat}"
 
 HEADERS = {
     "User-Agent": "WoltAnalyzer/1.0 (pricing research tool)",
@@ -25,6 +28,7 @@ HEADERS = {
 
 REQUEST_TIMEOUT = 15  # seconds
 RETRY_WAIT = 2.0      # seconds between retry attempts
+OSRM_DELAY = 0.3      # seconds between OSRM calls (be polite to the free service)
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +43,34 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> int:
     dlambda = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
     return int(R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
+
+
+# ---------------------------------------------------------------------------
+# Road distance via OSRM
+# ---------------------------------------------------------------------------
+
+def get_road_distance(user_lat: float, user_lon: float, venue_lat: float, venue_lon: float) -> float:
+    """Return road distance in metres between user and venue using OSRM.
+
+    Uses the public OSRM routing service (lon,lat coordinate order).
+    Falls back to Haversine * 1.4 (typical urban road factor) if OSRM fails.
+    Note: caller is responsible for adding OSRM_DELAY between calls.
+    """
+    try:
+        url = OSRM_URL.format(
+            user_lon=user_lon, user_lat=user_lat,
+            venue_lon=venue_lon, venue_lat=venue_lat,
+        )
+        req = _urllib_request.Request(url, headers={"User-Agent": "WoltAnalyzer/1.0"})
+        with _urllib_request.urlopen(req, timeout=REQUEST_TIMEOUT) as r:
+            body = json.loads(r.read())
+        routes = body.get("routes", [])
+        if routes and routes[0].get("legs"):
+            return float(routes[0]["legs"][0]["distance"])
+    except Exception:
+        pass
+    # Fallback: straight-line Haversine * 1.4 urban road factor
+    return haversine(user_lat, user_lon, venue_lat, venue_lon) * 1.4
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +113,8 @@ def _extract_location(loc) -> list:
         coords = loc.get("coordinates")
         if isinstance(coords, list) and len(coords) >= 2:
             return coords
-    return [None, None]
+    return [None,
+ None]
 
 # ---------------------------------------------------------------------------
 # Restaurant listings
@@ -219,6 +252,64 @@ def _find_price_ranges(data: dict) -> list[dict]:
     return _search(data) or []
 
 
+def _find_distance_ranges(data: dict) -> list[dict]:
+    """Locate the distance_ranges array anywhere in the dynamic pricing response.
+
+    Checks known paths first (venue_raw.delivery_specs.delivery_pricing.distance_ranges,
+    delivery_pricing.distance_ranges, etc.), then falls back to a recursive search.
+    """
+    # Common known paths (ordered by preference)
+    candidates = [
+        _deep_get(data, "venue_raw", "delivery_specs", "delivery_pricing", "distance_ranges"),
+        _deep_get(data, "delivery_pricing", "distance_ranges"),
+        _deep_get(data, "distance_ranges"),
+        _deep_get(data, "venue_raw", "delivery_pricing", "distance_ranges"),
+    ]
+    for c in candidates:
+        if isinstance(c, list) and c:
+            return c
+
+    # Recursive search as fallback
+    def _search(obj, depth=0):
+        if depth > 8:
+            return None
+        if isinstance(obj, dict):
+            if "distance_ranges" in obj and isinstance(obj["distance_ranges"], list):
+                return obj["distance_ranges"]
+            for v in obj.values():
+                result = _search(v, depth + 1)
+                if result is not None:
+                    return result
+        elif isinstance(obj, list):
+            for item in obj:
+                result = _search(item, depth + 1)
+                if result is not None:
+                    return result
+        return None
+
+    return _search(data) or []
+
+
+def _compute_fee_from_ranges(distance_ranges: list[dict], road_dist_m: float) -> float:
+    """Compute delivery fee in cents given distance_ranges and road distance in metres.
+
+    Iterates ranges in order; selects the first range where road_dist_m < max
+    (or max == 0, which signals the last/unbounded range).
+    Formula: fee_cents = a + b * road_dist_m
+    """
+    for dr in distance_ranges:
+        max_d = dr.get("max", 0)
+        a = dr.get("a", 0)
+        b = dr.get("b", 0.0)
+        if max_d == 0 or road_dist_m < max_d:
+            return float(a) + float(b) * road_dist_m
+    # Fallback: use last range
+    if distance_ranges:
+        last = distance_ranges[-1]
+        return float(last.get("a", 0)) + float(last.get("b", 0.0)) * road_dist_m
+    return 0.0
+
+
 def extract_pricing(data: dict) -> dict:
     """Parse dynamic pricing JSON into a flat pricing dict."""
     result = {
@@ -226,7 +317,7 @@ def extract_pricing(data: dict) -> dict:
         "service_fee_min_eur": "",
         "service_fee_max_eur": "",
         "minimum_basket_eur":  "",
-        "minimum_basket_type": "none",
+        "minimum_basket_type": "None",
         "self_delivery":       "No",
     }
 
@@ -306,7 +397,7 @@ def extract_pricing(data: dict) -> dict:
         elif "BLOCK" in surcharge_type_val or "BLOCKED" in surcharge_type_val:
             result["minimum_basket_type"] = "blocked"
         else:
-            result["minimum_basket_type"] = "none"
+            result["minimum_basket_type"] = "None"
 
     # ------------------------------------------------------------------
     # f) Self-delivery
@@ -360,7 +451,13 @@ CSV_COLUMNS = [
 
 
 def build_row(venue: dict, pricing: dict, user_lat: float, user_lon: float) -> dict:
-    """Assemble one CSV row from venue data + pricing data."""
+    """Assemble one CSV row from venue data + pricing data.
+
+    delivery_fee_eur is taken from pricing["delivery_fee_eur"] if present
+    (computed from distance_ranges + OSRM road distance in the main loop),
+    otherwise falls back to venue["delivery_price_int"] / 100.
+    distance_m always uses straight-line Haversine per spec.
+    """
     loc = venue.get("location", [None, None])
     # Wolt returns [lon, lat]
     if isinstance(loc, (list, tuple)) and len(loc) == 2:
@@ -369,11 +466,17 @@ def build_row(venue: dict, pricing: dict, user_lat: float, user_lon: float) -> d
         venue_lon, venue_lat = None, None
 
     if venue_lat is not None and venue_lon is not None:
+        # distance_m: straight-line Haversine (per spec)
         distance_m = haversine(user_lat, user_lon, float(venue_lat), float(venue_lon))
     else:
         distance_m = 0
 
-    delivery_fee_eur = f"{venue.get('delivery_price_int', 0) / 100:.2f}"
+    # Delivery fee: prefer value computed from distance_ranges; fallback to listings API value
+    if "delivery_fee_eur" in pricing:
+        delivery_fee_eur = pricing["delivery_fee_eur"]
+    else:
+        delivery_fee_eur = f"{venue.get('delivery_price_int', 0) / 100:.2f}"
+
     online_str = "Yes" if venue.get("online") else "No"
 
     return {
@@ -390,7 +493,7 @@ def build_row(venue: dict, pricing: dict, user_lat: float, user_lon: float) -> d
         "service_fee_min_eur": pricing.get("service_fee_min_eur", ""),
         "service_fee_max_eur": pricing.get("service_fee_max_eur", ""),
         "minimum_basket_eur": pricing.get("minimum_basket_eur", ""),
-        "minimum_basket_type": pricing.get("minimum_basket_type", "none"),
+        "minimum_basket_type": pricing.get("minimum_basket_type", "None"),
     }
 
 
@@ -474,11 +577,37 @@ def main() -> None:
                 "service_fee_min_eur": "",
                 "service_fee_max_eur": "",
                 "minimum_basket_eur":  "",
-                "minimum_basket_type": "none",
+                "minimum_basket_type": "None",
                 "self_delivery":       "No",
             }
         else:
             pricing = extract_pricing(data)
+
+            # ----------------------------------------------------------
+            # Compute delivery fee from distance_ranges + OSRM road dist
+            # ----------------------------------------------------------
+            loc = venue.get("location", [None, None])
+            if isinstance(loc, (list, tuple)) and len(loc) == 2:
+                venue_lon_val, venue_lat_val = loc
+            else:
+                venue_lon_val, venue_lat_val = None, None
+
+            dist_ranges = _find_distance_ranges(data)
+
+            if dist_ranges and venue_lat_val is not None and venue_lon_val is not None:
+                road_dist = get_road_distance(
+                    lat, lon, float(venue_lat_val), float(venue_lon_val)
+                )
+                time.sleep(OSRM_DELAY)  # be polite to the free OSRM service
+                fee_cents = _compute_fee_from_ranges(dist_ranges, road_dist)
+                pricing["delivery_fee_eur"] = f"{fee_cents / 100:.2f}"
+                print(f"    road_dist={road_dist:.0f}m  delivery_fee=€{fee_cents/100:.2f}")
+            else:
+                # Fallback: use delivery_price_int from listings API
+                fallback_cents = venue.get("delivery_price_int", 0) or 0
+                pricing["delivery_fee_eur"] = f"{fallback_cents / 100:.2f}"
+                if not dist_ranges:
+                    print(f"    [WARN] No distance_ranges found — falling back to listings API value")
 
         row = build_row(venue, pricing, lat, lon)
         rows.append(row)
