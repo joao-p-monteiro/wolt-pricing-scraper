@@ -68,6 +68,21 @@ def geocode(address: str) -> tuple[float, float]:
     return lat, lon
 
 
+
+# ---------------------------------------------------------------------------
+# Location helpers
+# ---------------------------------------------------------------------------
+
+def _extract_location(loc) -> list:
+    """Extract [lon, lat] from venue location field (handles both list and dict formats)."""
+    if isinstance(loc, list) and len(loc) >= 2:
+        return loc  # Already [lon, lat]
+    if isinstance(loc, dict):
+        coords = loc.get("coordinates")
+        if isinstance(coords, list) and len(coords) >= 2:
+            return coords
+    return [None, None]
+
 # ---------------------------------------------------------------------------
 # Restaurant listings
 # ---------------------------------------------------------------------------
@@ -111,7 +126,7 @@ def fetch_listings(lat: float, lon: float) -> list[dict]:
                 "name":               venue.get("name", ""),
                 "slug":               slug,
                 "address":            venue.get("address", ""),
-                "location":           venue.get("location", {}).get("coordinates", [None, None]),
+                "location":           _extract_location(venue.get("location")),
                 "online":             venue.get("online", False),
                 "delivery_price_int": venue.get("delivery_price_int", 0) or 0,
                 "estimate":           venue.get("estimate"),
