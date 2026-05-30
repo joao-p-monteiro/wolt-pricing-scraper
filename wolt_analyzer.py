@@ -90,10 +90,13 @@ def fetch_listings(lat: float, lon: float) -> list[dict]:
     seen_slugs: set[str] = set()
     venues: list[dict] = []
 
-    # Walk every section that uses the "venue-list" template
+    # Walk every section that contains venue data (handles multiple template names)
     sections = data.get("sections", [])
     for section in sections:
-        if section.get("template") != "venue-list":
+        # Accept any section that contains venue data (handles template variations)
+        template = section.get("template", "")
+        name = section.get("name", "")
+        if not ("venue" in template.lower() or "venue" in name.lower() or "restaurant" in name.lower()):
             continue
         items = section.get("items", [])
         for item in items:
