@@ -1,0 +1,14 @@
+restaurant_name,slug,address,distance_m,currency,online,self_delivery,delivery_estimate,delivery_fee_eur,service_fee_pct,service_fee_min_eur,service_fee_max_eur,minimum_basket_eur,minimum_basket_type
+Submarine Burger Radnička,submarine-burger-radnicka,"Radnička cesta 20, 10000 Zagreb",245,EUR,Yes,No,25-35 min,0.99,6.0,0.60,1.69,7.00,sliding
+McDonald's Držićeva,mcdonalds-drziceva,"Avenija Marina Držića 4, 10000 Zagreb",380,EUR,Yes,No,15-25 min,0.00,6.0,0.49,1.99,5.00,sliding
+Pizzeria Dodo,pizzeria-dodo,"Ulica grada Vukovara 228, 10000 Zagreb",450,EUR,Yes,Yes,30-40 min,0.00,6.0,0.60,2.00,6.00,None
+Pizza Hut Dubrava,pizza-hut-dubrava,"Avenija Dubrava 2, 10000 Zagreb",520,EUR,Yes,No,25-35 min,1.49,6.0,0.60,2.50,8.00,None
+Rocket Burger,rocket-burger-zagreb,"Zavrtnica 17, 10000 Zagreb",610,EUR,Yes,No,30-40 min,1.49,6.0,0.60,2.00,7.00,sliding
+Sushi Bar Takenoko,takenoko-zagreb,"Masarykova 22, 10000 Zagreb",720,EUR,Yes,Yes,35-45 min,0.00,8.0,1.00,3.50,12.00,None
+KFC Zagreb Arena,kfc-zagreb-arena,"Avenija Većeslava Holjevca 2, 10000 Zagreb",890,EUR,Yes,No,20-30 min,1.99,8.0,0.75,2.50,10.00,blocked
+Burger King Branimir,burger-king-branimir,"Branimirova 29, 10000 Zagreb",950,EUR,Yes,No,20-30 min,1.49,6.0,0.60,2.00,8.00,sliding
+Pasta Fasta,pasta-fasta-zagreb,"Vlaška ulica 78, 10000 Zagreb",1100,EUR,Yes,No,35-45 min,1.99,6.0,0.60,2.50,9.00,sliding
+Batak Grill Savica,batak-grill-savica,"Savska cesta 32, 10000 Zagreb",1350,EUR,No,Yes,35-45 min,2.49,8.0,1.00,4.00,15.00,blocked
+Wok & Walk,wok-and-walk-zagreb,"Ilica 49, 10000 Zagreb",1580,EUR,Yes,No,30-40 min,2.49,6.0,0.60,2.50,8.00,None
+Gyros King,gyros-king-zagreb,"Heinzelova ulica 66, 10000 Zagreb",1820,EUR,Yes,No,40-50 min,2.99,6.0,0.75,3.00,10.00,sliding
+Asia Wok Express,asia-wok-express-zagreb,"Ulica Ivana Lučića 2a, 10000 Zagreb",2100,EUR,Yes,No,45-55 min,2.99,8.0,1.00,3.50,12.00,None
