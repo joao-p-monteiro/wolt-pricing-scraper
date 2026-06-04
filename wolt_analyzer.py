@@ -10,7 +10,7 @@ import random
 import time
 import urllib.parse
 import urllib.request as _urllib_request
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
@@ -18,10 +18,13 @@ import requests
 # Constants
 # ---------------------------------------------------------------------------
 
-NOMINATIM_URL    = "https://nominatim.openstreetmap.org/search"
-WOLT_AUTH_URL    = "https://authentication.wolt.com/v1/wauth2/access_token"
+NOMINATIM_URL     = "https://nominatim.openstreetmap.org/search"
+WOLT_AUTH_URL     = "https://authentication.wolt.com/v1/wauth2/access_token"
 WOLT_LISTINGS_URL = "https://restaurant-api.wolt.com/v1/pages/restaurants"
 WOLT_DYNAMIC_URL  = "https://consumer-api.wolt.com/order-xp/web/v1/venue/slug/{slug}/dynamic"
+
+# Persists the rotated refresh token so the session survives subsequent runs.
+TOKEN_FILE = ".wolt_tokens.json"
 
 BASE_HEADERS = {
     "User-Agent": "WoltAnalyzer/1.0 (pricing research tool)",
@@ -33,15 +36,54 @@ RETRY_WAIT      = 2.0  # seconds between retry attempts
 
 
 # ---------------------------------------------------------------------------
-# Authentication
+# Authentication & token persistence
 # ---------------------------------------------------------------------------
+
+def load_saved_tokens() -> dict:
+    """Load previously persisted tokens from TOKEN_FILE.
+
+    Returns an empty dict if the file is absent, empty, or unreadable.
+    """
+    try:
+        with open(TOKEN_FILE, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_tokens(refresh_token: str, access_token: str) -> None:
+    """Persist tokens to TOKEN_FILE.
+
+    The Wolt refresh token ROTATES on every exchange -- calling this after
+    each successful exchange ensures the next run can still authenticate.
+    """
+    payload = {
+        "refresh_token": refresh_token,
+        "access_token":  access_token,
+        "saved_at":      datetime.now(tz=timezone.utc).isoformat(),
+    }
+    try:
+        with open(TOKEN_FILE, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+        print(f"  -> Tokens persisted to {TOKEN_FILE} (refresh token rotated).")
+    except OSError as exc:
+        print(f"  [WARNING] Could not save tokens to {TOKEN_FILE}: {exc}")
+
 
 def exchange_refresh_token(refresh_token: str) -> str | None:
     """Exchange a Wolt refresh token for a short-lived access token.
 
-    POST https://authentication.wolt.com/v1/wauth2/access_token
-    Content-Type: application/x-www-form-urlencoded
-    Body: grant_type=refresh_token&refresh_token=<token>
+    Endpoint: POST https://authentication.wolt.com/v1/wauth2/access_token
+    Body MUST be application/x-www-form-urlencoded -- JSON body returns HTTP 415:
+        grant_type=refresh_token&refresh_token=<token>
+
+    The refresh token ROTATES on every successful exchange.  The new
+    refresh_token is automatically persisted to TOKEN_FILE so the next run
+    can still authenticate without re-supplying the original credential.
+
+    Only "Authorization: Bearer <access_token>" is honoured on subsequent
+    dynamic-pricing calls; the legacy "w-authorization" header is silently
+    ignored by Wolt's servers.
 
     Returns the access_token string, or None on failure.
     """
@@ -59,10 +101,17 @@ def exchange_refresh_token(refresh_token: str) -> str | None:
     try:
         with _urllib_request.urlopen(req, timeout=REQUEST_TIMEOUT) as r:
             body = json.loads(r.read())
-        token = body.get("access_token")
-        if token:
-            print(f"  → Auth token obtained (type: {body.get('token_type', 'unknown')})")
-        return token
+        access_token = body.get("access_token")
+        if access_token:
+            print(f"  -> Auth token obtained (type: {body.get('token_type', 'unknown')})")
+            # Persist the rotated refresh token for the next invocation
+            new_refresh = body.get("refresh_token")
+            if new_refresh:
+                _save_tokens(new_refresh, access_token)
+            else:
+                print("  [WARNING] Server did not return a new refresh_token -- "
+                      "this session may not be reusable.")
+        return access_token
     except Exception as exc:
         print(f"[WARNING] Token exchange failed: {exc}")
         return None
@@ -72,7 +121,7 @@ def build_headers(access_token: str | None = None) -> dict:
     """Build request headers, optionally injecting the Bearer token."""
     headers = dict(BASE_HEADERS)
     if access_token:
-        headers["Authorization"] = f"Bearer {access_token}"
+        headers["Authorization"] = f"Bearer {access_token}"  # only this header is honoured
         headers["App-Language"]  = "en"
         headers["Platform"]      = "Web"
     return headers
@@ -236,11 +285,18 @@ def _deep_get(obj, *keys, default=None):
 
 
 def _find_price_ranges(data: dict) -> list[dict]:
-    """Locate the price_ranges array anywhere in the dynamic pricing response."""
+    """Locate the price_ranges array anywhere in the dynamic pricing response.
+
+    price_ranges lives inside delivery_specs.delivery_pricing (or the
+    delivery_pricing_without_subscription sibling when the subscription path
+    is absent).  A recursive search is used as a final fallback.
+    """
     candidates = [
         _deep_get(data, "delivery_pricing", "price_ranges"),
         _deep_get(data, "price_ranges"),
         _deep_get(data, "venue_raw", "delivery_specs", "delivery_pricing", "price_ranges"),
+        _deep_get(data, "venue_raw", "delivery_specs",
+                  "delivery_pricing_without_subscription", "price_ranges"),
         _deep_get(data, "venue_raw", "delivery_pricing", "price_ranges"),
     ]
     for c in candidates:
@@ -292,7 +348,25 @@ def _compute_delivery_fee(price_ranges: list[dict], haversine_distance_m: float)
 
 
 def extract_pricing(data: dict) -> dict:
-    """Parse dynamic pricing JSON into a flat pricing dict."""
+    """Parse dynamic pricing JSON into a flat pricing dict.
+
+    Service fee is always derived from price_ranges -- this is True whether
+    the request was authenticated or not.  The price_ranges coefficients
+    ARE the differentiator:
+
+        Authenticated   : b = 0.10  (10%)  |  floor = EUR 0.70  |  cap = EUR 2.99
+        Unauthenticated : b = 0.06  ( 6%)  |  floor = EUR 0.60  |  cap = EUR 1.69
+
+    Important: do_use_backend_pricing stays "no" and service_fee_estimate is
+    absent even when authenticated -- do NOT depend on those fields.
+
+    price_ranges is DUAL-PURPOSE:
+      - DELIVERY FEE  : input = Haversine distance (m);  fee_cents = a + b*dist
+      - SERVICE FEE   : input = basket (cents);
+                        rate%  = b*100 for bands where b > 0;
+                        floor  = min field of first rate band / 100;
+                        cap    = a of final b==0 band (highest min) / 100.
+    """
     result: dict = {
         "service_fee_pct":     "",
         "service_fee_min_eur": "",
@@ -306,51 +380,52 @@ def extract_pricing(data: dict) -> dict:
         return result
 
     # ------------------------------------------------------------------
-    # a) Service fee — Priority 1: service_fee_estimate (authenticated)
+    # a) Service fee -- always from price_ranges coefficients
+    #    (service_fee_estimate is absent even when authenticated)
     # ------------------------------------------------------------------
-    sfe = (_deep_get(data, "venue", "service_fee_estimate")
-           or _deep_get(data, "service_fee_estimate")
-           or _deep_get(data, "venue_raw", "service_fee_estimate"))
+    price_ranges = _find_price_ranges(data)
 
-    if sfe and isinstance(sfe, dict):
-        pct = sfe.get("percentage")
-        if pct is not None:
-            result["service_fee_pct"] = str(pct)
+    # Rate bands: b > 0  ->  service_fee% = b * 100
+    b_positive = [
+        pr for pr in price_ranges
+        if isinstance(pr, dict) and (pr.get("b") or 0) > 0
+    ]
+    # Cap/floor bands: b == 0 with a non-zero a value
+    b_zero = [
+        pr for pr in price_ranges
+        if isinstance(pr, dict) and (pr.get("b") or 0) == 0 and (pr.get("a") or 0) > 0
+    ]
 
-        fee_min = sfe.get("min")
-        if fee_min is not None:
-            result["service_fee_min_eur"] = f"{fee_min / 100:.2f}"
+    if b_positive:
+        b_val = b_positive[0].get("b", 0)
+        result["service_fee_pct"] = f"{round(b_val * 100, 4):.4g}"
 
-        fee_max = sfe.get("max")
-        if fee_max is not None:
-            result["service_fee_max_eur"] = f"{fee_max / 100:.2f}"
-    else:
-        # ------------------------------------------------------------------
-        # Priority 2: extract from price_ranges
-        # b > 0  → service-fee rate (b * 100 = percentage)
-        # b == 0 → fixed amounts (min/max from a values)
-        # ------------------------------------------------------------------
-        price_ranges = _find_price_ranges(data)
-        b_positive = [
-            pr for pr in price_ranges
-            if isinstance(pr, dict) and (pr.get("b") or 0) > 0
-        ]
-        if b_positive:
-            b_val = b_positive[0].get("b", 0)
-            result["service_fee_pct"] = f"{round(b_val * 100, 4):.4g}"
+        # Floor: min field of the first rate band is the basket threshold that
+        # equals the minimum fee charged (e.g. 70 cents -> EUR 0.70 authenticated).
+        floor_cents = b_positive[0].get("min", 0)
+        if floor_cents:
+            result["service_fee_min_eur"] = f"{floor_cents / 100:.2f}"
 
-        b_zero = [
-            pr for pr in price_ranges
-            if isinstance(pr, dict) and (pr.get("b") or 0) == 0
-        ]
-        if b_zero:
-            a_values = [pr.get("a", 0) for pr in b_zero if pr.get("a") is not None]
-            if a_values:
-                result["service_fee_min_eur"] = f"{min(a_values) / 100:.2f}"
-                result["service_fee_max_eur"] = f"{max(a_values) / 100:.2f}"
+    if b_zero:
+        # Cap: a of the final capped band (the one with the highest min value).
+        cap_band  = max(b_zero, key=lambda pr: pr.get("min", 0))
+        cap_cents = cap_band.get("a", 0)
+        if cap_cents:
+            result["service_fee_max_eur"] = f"{cap_cents / 100:.2f}"
+
+        # Fallback for floor if not derivable from the rate band's min field.
+        if not result["service_fee_min_eur"]:
+            other_bands = [
+                pr for pr in b_zero
+                if pr.get("min", 0) < cap_band.get("min", 0)
+            ]
+            if other_bands:
+                floor_a = min(pr.get("a", 0) for pr in other_bands)
+                if floor_a:
+                    result["service_fee_min_eur"] = f"{floor_a / 100:.2f}"
 
     # ------------------------------------------------------------------
-    # b) Minimum basket (cents → EUR)
+    # b) Minimum basket (cents -> EUR)
     # ------------------------------------------------------------------
     min_basket_cents = None
     paths = [
@@ -474,19 +549,19 @@ def build_row(venue: dict, pricing: dict, user_lat: float, user_lon: float) -> d
     online_str = "Yes" if venue.get("online") else "No"
 
     return {
-        "restaurant_name":    venue.get("name", ""),
-        "slug":               venue.get("slug", ""),
-        "address":            venue.get("address", ""),
-        "distance_m":         distance_m,
-        "currency":           venue.get("currency", ""),
-        "online":             online_str,
-        "self_delivery":      pricing.get("self_delivery", "No"),
-        "delivery_estimate":  format_estimate(venue),
-        "delivery_fee_eur":   delivery_fee_eur,
-        "service_fee_pct":    pricing.get("service_fee_pct", ""),
+        "restaurant_name":     venue.get("name", ""),
+        "slug":                venue.get("slug", ""),
+        "address":             venue.get("address", ""),
+        "distance_m":          distance_m,
+        "currency":            venue.get("currency", ""),
+        "online":              online_str,
+        "self_delivery":       pricing.get("self_delivery", "No"),
+        "delivery_estimate":   format_estimate(venue),
+        "delivery_fee_eur":    delivery_fee_eur,
+        "service_fee_pct":     pricing.get("service_fee_pct", ""),
         "service_fee_min_eur": pricing.get("service_fee_min_eur", ""),
         "service_fee_max_eur": pricing.get("service_fee_max_eur", ""),
-        "minimum_basket_eur": pricing.get("minimum_basket_eur", ""),
+        "minimum_basket_eur":  pricing.get("minimum_basket_eur", ""),
         "minimum_basket_type": pricing.get("minimum_basket_type", "None"),
     }
 
@@ -507,14 +582,14 @@ def export_csv(rows: list[dict], output_path: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Wolt Restaurant Pricing Analyzer – fetches pricing for all restaurants "
+            "Wolt Restaurant Pricing Analyzer - fetches pricing for all restaurants "
             "at a delivery address."
         ),
     )
     parser.add_argument(
         "address",
         type=str,
-        help='Delivery address, e.g. "Avenija Marina Držića 76, 10000, Zagreb, Croatia"',
+        help='Delivery address, e.g. "Avenija Marina Drzica 76, 10000, Zagreb, Croatia"',
     )
     parser.add_argument(
         "--output",
@@ -529,7 +604,8 @@ def parse_args() -> argparse.Namespace:
         metavar="REFRESH_TOKEN",
         help=(
             "Wolt refresh token for authenticated requests (optional). "
-            "Falls back to the WOLT_REFRESH_TOKEN environment variable."
+            "Falls back to the WOLT_REFRESH_TOKEN environment variable, "
+            f"then to the saved token in {TOKEN_FILE}."
         ),
     )
     parser.add_argument(
@@ -559,38 +635,50 @@ def main() -> None:
 
     # ------------------------------------------------------------------
     # 1. Optional authentication
+    #    Priority: --token flag  >  WOLT_REFRESH_TOKEN env var  >  TOKEN_FILE
     # ------------------------------------------------------------------
     refresh_token = args.token or os.environ.get("WOLT_REFRESH_TOKEN")
-    # Normalise: env vars from vaults can be URL-encoded and/or quote-wrapped
+
+    # Normalise: env vars can be URL-encoded and/or quote-wrapped
     if refresh_token:
         refresh_token = urllib.parse.unquote(refresh_token).strip('"').strip("'")
+
+    # Last resort: load from persisted token file (contains rotated token from last run)
+    if not refresh_token:
+        saved = load_saved_tokens()
+        if saved.get("refresh_token"):
+            refresh_token = saved["refresh_token"]
+            print(f"\nUsing saved refresh token from {TOKEN_FILE}.")
+
     access_token: str | None = None
 
     if refresh_token:
-        print("\nAuthenticating with Wolt …")
+        print("\nAuthenticating with Wolt ...")
         access_token = exchange_refresh_token(refresh_token)
         if access_token:
-            print("  → Authenticated mode: Bearer token will be sent on all API calls.")
+            print("  -> Authenticated mode: 10% service fee tier (min EUR 0.70 / max EUR 2.99).")
         else:
-            print("  [WARNING] Authentication failed – proceeding unauthenticated.")
+            print("  [WARNING] Authentication failed - proceeding unauthenticated "
+                  "(public 6% service fee tier: min EUR 0.60 / max EUR 1.69).")
     else:
-        print("\nNo refresh token provided – proceeding unauthenticated (public pricing).")
+        print("\nNo refresh token provided - proceeding unauthenticated "
+              "(public pricing: 6% service fee, min EUR 0.60, max EUR 1.69).")
 
     headers = build_headers(access_token)
 
     # ------------------------------------------------------------------
     # 2. Geocode the delivery address
     # ------------------------------------------------------------------
-    print(f"\nGeocoding address: {args.address!r} …")
+    print(f"\nGeocoding address: {args.address!r} ...")
     lat, lon = geocode(args.address)
-    print(f"  → Coordinates: lat={lat:.6f}, lon={lon:.6f}\n")
+    print(f"  -> Coordinates: lat={lat:.6f}, lon={lon:.6f}\n")
 
     # ------------------------------------------------------------------
     # 3. Fetch restaurant listings
     # ------------------------------------------------------------------
-    print("Fetching restaurant listings from Wolt …")
+    print("Fetching restaurant listings from Wolt ...")
     venues = fetch_listings(lat, lon, headers)
-    print(f"  → {len(venues)} unique restaurants found.\n")
+    print(f"  -> {len(venues)} unique restaurants found.\n")
 
     if not venues:
         print("[WARNING] No restaurants returned by the listings API.  Exiting.")
@@ -610,7 +698,7 @@ def main() -> None:
     if args.num_restaurants is not None and args.num_restaurants > 0:
         venues = venues[: args.num_restaurants]
         print(
-            f"  → Limiting to the {len(venues)} closest restaurants "
+            f"  -> Limiting to the {len(venues)} closest restaurants "
             f"(--num-restaurants {args.num_restaurants}).\n"
         )
 
@@ -623,14 +711,14 @@ def main() -> None:
 
     for idx, venue in enumerate(venues, start=1):
         name = venue.get("name", venue.get("slug", "?"))
-        print(f"  [{idx}/{total}] {name} …", end=" ", flush=True)
+        print(f"  [{idx}/{total}] {name} ...", end=" ", flush=True)
 
         time.sleep(random.uniform(1.0, 1.5))
 
         data = fetch_dynamic_pricing(venue["slug"], lat, lon, headers)
 
         if data is None:
-            print("[WARN] Could not fetch pricing after retry – using empty values.")
+            print("[WARN] Could not fetch pricing after retry - using empty values.")
             pricing: dict = {
                 "service_fee_pct":     "",
                 "service_fee_min_eur": "",
@@ -659,7 +747,7 @@ def main() -> None:
                 fee_cents = _compute_delivery_fee(price_ranges, h_dist)
                 pricing["delivery_fee_eur"] = f"{fee_cents / 100:.2f}"
                 print(
-                    f"dist={h_dist}m  fee=€{fee_cents/100:.2f}  "
+                    f"dist={h_dist}m  fee=EUR {fee_cents/100:.2f}  "
                     f"svc={pricing.get('service_fee_pct', '?')}%"
                 )
             else:
@@ -667,7 +755,7 @@ def main() -> None:
                 fallback_cents = venue.get("delivery_price_int", 0) or 0
                 pricing["delivery_fee_eur"] = f"{fallback_cents / 100:.2f}"
                 print(
-                    f"[WARN] No price_ranges – fallback fee=€{fallback_cents/100:.2f}  "
+                    f"[WARN] No price_ranges - fallback fee=EUR {fallback_cents/100:.2f}  "
                     f"svc={pricing.get('service_fee_pct', '?')}%"
                 )
 

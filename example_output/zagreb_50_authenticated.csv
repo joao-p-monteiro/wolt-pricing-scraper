@@ -1,0 +1,51 @@
+restaurant_name,slug,address,distance_m,delivery_fee_eur,service_fee_rate_pct,service_fee_min_eur,service_fee_max_eur,minimum_basket_eur,minimum_type,self_delivery,online,delivery_estimate,currency
+Mamma Mia!,mamma-mia-zg,Lastovska 38,221,0.0,10.0,0.7,2.99,7.0,sliding,No,Yes,15-25,EUR
+Leggiero - Savica,leggiero-savica,Lastovska ulica 42,234,0.0,10.0,0.7,2.99,7.0,sliding,No,Yes,15-25,EUR
+Gyotaku Sushi - Savica,gyotaku-sushi-savica,Lastovska 42,234,0.0,10.0,0.7,2.99,7.0,sliding,No,Yes,15-25,EUR
+Pilipino House,pilipino-house,This is a virtual venue,338,0.0,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Pizzeria Loop,pizzeria-loop,Otona Župančića 18,373,0.0,10.0,0.7,2.99,7.0,sliding,No,Yes,20-30,EUR
+Pizza Savizza,pizza-savizza,Ljerke Šram 8,398,0.0,10.0,0.7,2.99,7.0,sliding,No,Yes,20-30,EUR
+Casper Grill,casper-grill,Lastovska 2a,418,0.0,10.0,0.7,2.99,7.0,sliding,No,Yes,20-30,EUR
+Restoran Domaća Kuhinja,restoran-domaa-kuhinja,This is a virtual venue,442,0.0,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Kile’s tasty grill - Savica,kiles-tasty-grill,Lastovska 2a,457,0.0,10.0,0.7,2.99,7.0,sliding,No,Yes,30-40,EUR
+Restoran Libertas,restoran-libertas-zg,Ul. Ljerke Šram 6,460,0.26,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Yummy Pizza - Borovje,yummy-pizza,Dane Duića 5,477,0.26,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Batak - Savica,batak-grill-savica,Lastovska 1A,757,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,35-45,EUR
+Restoran Islamski centar,restoran-islamski-centar,Prilaz Safvet bega Bašagića 1,782,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,20-30,EUR
+Sofra - Borovje,sofra-borovje,1.gardijske brigade Tigrovi 27,828,0.5,10.0,0.7,2.99,7.5,sliding,No,Yes,25-35,EUR
+Wokstar - Rapska,wokstar-rapska,Rapska 4a,834,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Fat Mac Cheese Factory - Rapska,fat-mac-cheese-factory-rapska,Rapska 4a,834,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,15-25,EUR
+Kreo's kitchen - Rapska,kreos-kitchen-rapska,Rapska 4a,834,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,20-30,EUR
+Pani - Rapska,pani-rapska,Rapska 4a,834,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,20-30,EUR
+Tuk Tuk Express - Rapska,tuk-tuk-express-rapska,Rapska 4a,834,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+McDonald's - Kruge,mcdrive-kruge,Pile I br. 2,864,0.45,10.0,0.7,2.99,7.0,sliding,No,Yes,20-30,EUR
+Gladne oči - Korčulanska,gladne-oci-korulanska,Korčulanska 1,866,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,30-40,EUR
+China House,china-house-zagreb,Šipanska 16,906,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,15-25,EUR
+Arena Grill,arena-grillzg,Korčulanska ul. 3A,965,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Palačinke & Co. - Vukovarska,palainke-co-vukovarska,Vukovarska cesta 254,980,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,20-30,EUR
+Submarine Burger - Radnička,submarine-burger-radnicka,Radnička cesta 52,1092,0.0,10.0,0.7,2.99,7.0,sliding,No,Yes,30-40,EUR
+Mr. Chen,mrchen,Ul. grada Vukovara 269D,1132,0.76,10.0,0.7,2.99,7.0,sliding,No,Yes,15-25,EUR
+EATs by Juice Box - Radnička,eats-by-juice-box,This is a virtual venue,1143,0.76,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Zagi2GO,zagi2go,This is a virtual venue,1143,0.76,10.0,0.7,2.99,7.0,sliding,No,Yes,35-45,EUR
+Batak - Radnička,batak-grill-radnika,Radnička cesta 37b,1191,0.76,10.0,0.7,2.99,7.0,sliding,No,Yes,30-40,EUR
+Umami - Radnička,umami-radnicka,Radnička cesta 41A,1209,0.76,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Pizza & Bistro Mrs. Fogg,pizza-bistro-mrs-fogg,Karla Metikoša 2b,1330,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Pivnica Budweiser - Trnje,pivnica-budweiser-trnje,Bosutska 38,1331,0.76,10.0,0.7,2.99,7.0,sliding,No,Yes,30-40,EUR
+Buddy Pizza - Trnje,buddy-pizza-trnje,This is a virtual venue,1331,0.76,10.0,0.7,2.99,7.0,sliding,No,Yes,30-40,EUR
+Buddy Burgers - Trnje,buddy-burgers-trnje,This is a virtual venue,1332,0.76,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+McDonald's - Felix,mcdonalds-felix,"Heinzelova 65, Zagreb",1410,0.9,10.0,0.7,2.99,7.0,sliding,No,Yes,15-25,EUR
+Chevos Grill,chevos-grill,Adamićeva 1,1430,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Mlinar Brunch & More - Autobusni kolodvor,mlinar-brunch-autobusni,Avenija Marina Držića 4,1464,0.76,10.0,0.7,2.99,10.0,sliding,No,Yes,30-40,EUR
+KFC - Zapruđe,kfc-zaprude,Karla Metikoša 4,1468,0.5,10.0,0.7,2.99,7.5,sliding,No,Yes,20-30,EUR
+Wok by Matija - Zapruđe,wok-by-matija-zaprue,Trg Ivana Meštrovića 1B,1504,0.5,10.0,0.7,2.99,7.0,sliding,No,Yes,30-40,EUR
+Plavi Kebab,plavi-kebab,Donje Svetice 101,1540,0.76,10.0,0.7,2.99,7.0,sliding,No,Yes,30-40,EUR
+Palačinken,palainken,This is a virtual venue,1586,1.0,10.0,0.7,2.99,7.0,sliding,No,Yes,30-40,EUR
+Loaded Spud,loaded-spud,This is a virtual venue,1587,1.0,10.0,0.7,2.99,7.0,sliding,No,Yes,35-45,EUR
+Fit i sit,healthy-and-strong,Bosutska 16,1587,1.0,10.0,0.7,2.99,7.0,sliding,No,Yes,30-40,EUR
+Mama Kuha,mama-kuha,This is a virtual venue,1587,1.0,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Sendvičeraj,sendviceraj,This is a virtual venue,1587,1.0,10.0,0.7,2.99,7.0,sliding,No,Yes,30-40,EUR
+Burger Bar - Zavrtnica,burger-bar-zavrtnica,Zavrtnica 17,1721,1.0,10.0,0.7,2.99,7.0,sliding,No,Yes,40-50,EUR
+Mita's Pizza - Radnička,mitas-pizza-radnika,Ulica Stjepana Širole 6,1738,1.0,10.0,0.7,2.99,7.0,sliding,No,Yes,35-45,EUR
+Submarine Burger - Bundek,submarine-burger-bundek,Brune Bušića 15,1746,0.0,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR
+Il Padrino Premium Pizza,il-padrino-zg,Ulica Stjepana Širole 6,1755,1.0,10.0,0.7,2.99,7.0,sliding,No,Yes,35-45,EUR
+Zdravljak sport,zdravljak-sport,Barčev trg 16,1799,0.74,10.0,0.7,2.99,7.0,sliding,No,Yes,25-35,EUR

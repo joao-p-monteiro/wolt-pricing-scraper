@@ -12,3 +12,4 @@ dist/
 build/
 /*.csv
 !example_output/*.csv
+.wolt_tokens.json
