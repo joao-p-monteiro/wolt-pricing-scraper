@@ -1,14 +1,51 @@
-restaurant_name,slug,address,distance_m,currency,online,self_delivery,delivery_estimate,delivery_fee_eur,service_fee_pct,service_fee_min_eur,service_fee_max_eur,minimum_basket_eur,minimum_basket_type
-Submarine Burger Radnička,submarine-burger-radnicka,"Radnička cesta 20, 10000 Zagreb",245,EUR,Yes,No,25-35 min,0.99,6.0,0.60,1.69,7.00,sliding
-McDonald's Držićeva,mcdonalds-drziceva,"Avenija Marina Držića 4, 10000 Zagreb",380,EUR,Yes,No,15-25 min,0.00,6.0,0.49,1.99,5.00,sliding
-Pizzeria Dodo,pizzeria-dodo,"Ulica grada Vukovara 228, 10000 Zagreb",450,EUR,Yes,Yes,30-40 min,0.00,6.0,0.60,2.00,6.00,None
-Pizza Hut Dubrava,pizza-hut-dubrava,"Avenija Dubrava 2, 10000 Zagreb",520,EUR,Yes,No,25-35 min,1.49,6.0,0.60,2.50,8.00,None
-Rocket Burger,rocket-burger-zagreb,"Zavrtnica 17, 10000 Zagreb",610,EUR,Yes,No,30-40 min,1.49,6.0,0.60,2.00,7.00,sliding
-Sushi Bar Takenoko,takenoko-zagreb,"Masarykova 22, 10000 Zagreb",720,EUR,Yes,Yes,35-45 min,0.00,8.0,1.00,3.50,12.00,None
-KFC Zagreb Arena,kfc-zagreb-arena,"Avenija Većeslava Holjevca 2, 10000 Zagreb",890,EUR,Yes,No,20-30 min,1.99,8.0,0.75,2.50,10.00,blocked
-Burger King Branimir,burger-king-branimir,"Branimirova 29, 10000 Zagreb",950,EUR,Yes,No,20-30 min,1.49,6.0,0.60,2.00,8.00,sliding
-Pasta Fasta,pasta-fasta-zagreb,"Vlaška ulica 78, 10000 Zagreb",1100,EUR,Yes,No,35-45 min,1.99,6.0,0.60,2.50,9.00,sliding
-Batak Grill Savica,batak-grill-savica,"Savska cesta 32, 10000 Zagreb",1350,EUR,No,Yes,35-45 min,2.49,8.0,1.00,4.00,15.00,blocked
-Wok & Walk,wok-and-walk-zagreb,"Ilica 49, 10000 Zagreb",1580,EUR,Yes,No,30-40 min,2.49,6.0,0.60,2.50,8.00,None
-Gyros King,gyros-king-zagreb,"Heinzelova ulica 66, 10000 Zagreb",1820,EUR,Yes,No,40-50 min,2.99,6.0,0.75,3.00,10.00,sliding
-Asia Wok Express,asia-wok-express-zagreb,"Ulica Ivana Lučića 2a, 10000 Zagreb",2100,EUR,Yes,No,45-55 min,2.99,8.0,1.00,3.50,12.00,None
+restaurant_name,slug,address,distance_m,currency,online,self_delivery,delivery_estimate,delivery_fee_eur,original_delivery_price_eur,service_fee_pct,service_fee_min_eur,service_fee_max_eur,minimum_basket_eur,minimum_basket_type
+Leggiero - Savica,leggiero-savica,Lastovska ulica 42,234,EUR,Yes,No,15-25 min,0.29,0.29,10,2.99,2.99,7.00,None
+Gyotaku Sushi - Savica,gyotaku-sushi-savica,Lastovska 42,234,EUR,Yes,No,15-25 min,0.00,,,,,,None
+Pilipino House,pilipino-house,This is a virtual venue,337,EUR,Yes,No,25-35 min,0.29,0.29,10,2.99,2.99,7.00,None
+Pizzeria Loop,pizzeria-loop,Otona Župančića 18,372,EUR,Yes,No,25-35 min,0.29,0.29,10,2.99,2.99,7.00,None
+Casper Grill,casper-grill,Lastovska 2a,418,EUR,Yes,No,25-35 min,0.00,,,,,,None
+Kile’s tasty grill - Savica,kiles-tasty-grill,Lastovska 2a,457,EUR,Yes,No,25-35 min,0.29,0.29,10,2.99,2.99,7.00,None
+Yummy Pizza - Borovje,yummy-pizza,Dane Duića 5,477,EUR,Yes,No,25-35 min,0.55,0.55,10,2.99,2.99,7.00,None
+Batak - Savica,batak-grill-savica,Lastovska 1A,756,EUR,Yes,No,35-45 min,0.79,0.79,10,2.99,2.99,7.00,None
+Wokstar - Rapska,wokstar-rapska,Rapska 4a,833,EUR,Yes,No,25-35 min,0.00,,,,,,None
+McDonald's - Kruge,mcdrive-kruge,Pile I br. 2,864,EUR,Yes,No,20-30 min,1.15,1.15,10,2.99,2.99,7.00,None
+Gladne oči - Korčulanska,gladne-oci-korulanska,Korčulanska 1,866,EUR,Yes,No,30-40 min,0.79,0.79,10,2.99,2.99,7.00,None
+China House,china-house-zagreb,Šipanska 16,906,EUR,Yes,No,20-30 min,0.79,0.79,10,2.99,2.99,7.00,None
+Palačinke & Co. - Vukovarska,palainke-co-vukovarska,Vukovarska cesta 254,979,EUR,Yes,No,20-30 min,0.79,0.79,10,2.99,2.99,7.00,None
+Submarine Burger - Radnička,submarine-burger-radnicka,Radnička cesta 52,1091,EUR,Yes,No,35-45 min,0.39,0.39,10,2.99,2.99,7.00,None
+Mr. Chen,mrchen,Ul. grada Vukovara 269D,1132,EUR,Yes,No,20-30 min,0.00,,,,,,None
+Umami - Radnička,umami-radnicka,Radnička cesta 41A,1208,EUR,Yes,No,30-40 min,1.05,1.05,10,2.99,2.99,7.00,None
+Pivnica Budweiser - Trnje,pivnica-budweiser-trnje,Bosutska 38,1331,EUR,Yes,No,35-45 min,1.05,1.05,10,2.99,2.99,7.00,None
+Buddy Pizza - Trnje,buddy-pizza-trnje,This is a virtual venue,1331,EUR,Yes,No,35-45 min,1.05,1.05,10,2.99,2.99,7.00,None
+Chevos Grill,chevos-grill,Adamićeva 1,1430,EUR,Yes,No,30-40 min,1.05,1.05,10,2.99,2.99,7.00,None
+KFC - Zapruđe,kfc-zaprude,Karla Metikoša 4,1467,EUR,Yes,No,25-35 min,1.15,1.15,10,2.99,2.99,7.50,None
+Wok by Matija - Zapruđe,wok-by-matija-zaprue,Trg Ivana Meštrovića 1B,1503,EUR,Yes,No,30-40 min,0.00,,,,,,None
+Burger Bar - Zavrtnica,burger-bar-zavrtnica,Zavrtnica 17,1721,EUR,Yes,No,40-50 min,1.29,1.29,10,2.99,2.99,7.00,None
+Mita's Pizza - Radnička,mitas-pizza-radnika,Ulica Stjepana Širole 6,1738,EUR,Yes,No,45-55 min,1.29,1.29,10,2.99,2.99,7.00,None
+Pizzeria Duksa - Bundek,pizzeria-duksa-bundek,Ede Murtića 11,1810,EUR,Yes,No,40-50 min,1.29,1.29,10,2.99,2.99,7.00,None
+NU pizzeria,nu-pizzeria2,Vojina Bakića 2,1836,EUR,Yes,No,35-45 min,1.29,1.29,10,2.99,2.99,7.00,None
+Superfood by Rulla - Trnje,superfood-by-rulla-trnje,This is a virtual venue,2025,EUR,Yes,No,35-45 min,1.29,1.29,10,2.99,2.99,7.00,None
+GOOD FOOD - Palmotićeva,good-food-palmoticeva,Paromlinska 11a,2153,EUR,Yes,No,40-50 min,0.00,,,,,,None
+Pasta Project,pasta-projectt,This is a virtual venue,2203,EUR,Yes,No,40-50 min,1.55,1.55,10,2.99,2.99,7.00,None
+Palačinka bar - Šubićeva,palainkehr-ubieva,Šubićeva 40a c-1,2343,EUR,Yes,No,40-50 min,1.55,1.55,10,2.99,2.99,7.00,None
+Palačinke.hr - Šubićeva,palainkehr-kvatric,This is a virtual venue,2347,EUR,Yes,No,65-75 min,0.00,,,,,,None
+Crousty Sandwich - Kvatrić,crousty-sandwich-kvatri,This is a virtual venue,2366,EUR,Yes,No,45-55 min,1.55,1.55,10,2.99,2.99,7.00,None
+Park to Go,pizzeria-park,Martićeva 14D,2427,EUR,Yes,No,40-50 min,1.55,1.55,10,2.99,2.99,7.00,None
+Street food The Passage+,street-food-the-passage,Martićeva 29,2497,EUR,Yes,No,45-55 min,1.55,1.55,10,2.99,2.99,7.00,None
+Pizzeria Medena,pizzeria-medena,Sortina ul. 3,2597,EUR,Yes,No,40-50 min,1.55,1.55,10,2.99,2.99,7.00,None
+Hugo's Sushi - Centar,hugos-sushi-centar,Trg Drage Iblera 10,2633,EUR,Yes,No,55-65 min,1.55,1.55,10,2.99,2.99,7.00,None
+Baschiera,baschiera,Trg Senjskih Uskoka 7,2766,EUR,Yes,No,40-50 min,0.00,,,,,,None
+Snogu Street Wok Bar,snogu-street-wok-bar,Masarykova 19,3071,EUR,Yes,No,55-65 min,0.00,,,,,,None
+Koykan - Tkalčićeva,koykan-world-food-tkalciceva,Ul. Ivana Tkalčića 13,3166,EUR,Yes,No,50-60 min,1.79,1.79,10,2.99,2.99,7.00,None
+Pizza Hut - Ravnice,pizza-hut-ravnice,Maksimirsko naselje II 18,3188,EUR,Yes,No,45-55 min,2.59,2.59,7,0.80,1.97,7.00,None
+Dodo Pizza - Trešnjevka,dodo-pizzaa,Kranjčevićeva ulica 1,3289,EUR,Yes,No,45-55 min,2.25,2.25,10,2.99,2.99,7.00,None
+Stari kotač 2 - Medulićeva,stari-kotac-2-meduliceva,This is a virtual venue,3512,EUR,Yes,No,70-80 min,2.25,2.25,10,2.99,2.99,7.00,None
+Mason Burgers & Stuff,mason-burgers-stuff,This is a virtual venue,3585,EUR,Yes,No,45-55 min,2.25,2.25,10,2.99,2.99,7.00,None
+Bold.Burger,boldburger,Ilica 65-1,3600,EUR,Yes,No,50-60 min,2.25,2.25,10,2.99,2.99,7.00,None
+Restoran Bonaca,restoran-bonaca,Trakošćanska ul. 41,3848,EUR,Yes,No,55-65 min,0.00,,,,,,None
+Burger King - City Center One East,burger-king-city-center-one-east,Slavonska avenija 11D,3927,EUR,Yes,No,50-60 min,3.39,3.39,7,0.80,1.97,7.00,None
+Purple Monkey Asian Food - Trešnjevka,purple-monkey-asian-food-trenjevka,This is a virtual venue,4286,EUR,Yes,No,50-60 min,4.20,4.20,10,2.99,2.99,7.00,None
+4Burgers - Trešnjevka,4burgers-tresnjevka,This is a virtual venue,4286,EUR,Yes,No,50-60 min,4.20,4.20,10,2.99,2.99,7.00,None
+Food Republic,food-republic-new,Zagorska 18,4876,EUR,Yes,No,55-65 min,0.00,,,,,,None
+Pizzeria Riky’s,pizzeria-rikys-new,Zagorska 18,4876,EUR,Yes,No,55-65 min,0.00,,,,,,None
+Lezzet Kebab & Doner - Jarun,lezzet-kebab-doner, Pakoštanska ul. 5,5604,EUR,Yes,No,55-65 min,3.39,3.39,10,2.99,2.99,7.00,None
