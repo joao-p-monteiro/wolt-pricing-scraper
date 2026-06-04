@@ -1,222 +1,178 @@
 # Wolt Pricing Scraper
 
-A Python CLI tool that scans restaurants available from a delivery address on [Wolt](https://wolt.com) and exports their full pricing structure to CSV — including delivery fees, service fees, and minimum basket requirements.
+A Python CLI tool that scans every restaurant available from a given delivery address on [Wolt](https://wolt.com), extracts each venue's full pricing structure, and exports it to a CSV sorted by distance.
+
+It captures the **authentic, app-level pricing** — including the real delivery fee that Wolt shows in the app/website and the 10% service fee — by authenticating with your Wolt account.
 
 ---
 
-## Features
+## What it does
 
-- 📍 **Geocoding** — converts any free-text address to coordinates using OpenStreetMap Nominatim
-- 🏪 **Restaurant discovery** — fetches all venues available for delivery at your address
-- 🔐 **Optional authentication** — pass a Wolt refresh token to receive authenticated pricing (richer data where available)
-- 💶 **Delivery fees** — computed from Wolt's `price_ranges` formula using straight-line (Haversine) distance
-- 🧾 **Service fees** — extracted from `service_fee_estimate` (authenticated) or inferred from `price_ranges` coefficients
-- 🛒 **Minimum basket** — detects the minimum order value and whether it's a hard block or sliding surcharge
-- 🚚 **Self-delivery flag** — identifies restaurants that handle their own delivery vs. Wolt couriers
-- ⏱️ **Delivery estimate** — includes estimated delivery time range
-- 📄 **CSV export** — clean, analysis-ready output sorted by distance from your address
-- 🔢 **`--num-restaurants`** — limit processing to the N closest restaurants for fast exploratory runs
-
----
-
-## Requirements
-
-- Python 3.10+
-- [`requests`](https://pypi.org/project/requests/) library
+1. Geocodes a street address to latitude/longitude (Nominatim / OpenStreetMap).
+2. Fetches all restaurants deliverable to that location from Wolt's listings API.
+3. For each restaurant, calls Wolt's dynamic pricing endpoint and extracts the delivery fee, service fee, minimum basket, and venue metadata.
+4. Writes everything to a CSV sorted by straight-line distance (nearest first).
 
 ---
 
 ## Installation
 
 ```bash
+git clone https://github.com/joao-p-monteiro/wolt-pricing-scraper.git
+cd wolt-pricing-scraper
 pip install requests
 ```
 
-No other dependencies required — the tool uses only the Python standard library plus `requests`.
+Requires Python 3.8+. Only third-party dependency is `requests` (everything else is standard library).
 
 ---
 
 ## Usage
 
-### Basic (unauthenticated, all restaurants)
 ```bash
+# Basic — unauthenticated (public pricing)
 python3 wolt_analyzer.py "Avenija Marina Držića 76, 10000, Zagreb, Croatia"
-```
 
-### Custom output filename
-```bash
-python3 wolt_analyzer.py "Avenija Marina Držića 76, 10000, Zagreb, Croatia" --output zagreb.csv
-```
-
-### Authenticated (richer service-fee data where available)
-```bash
-python3 wolt_analyzer.py "Avenija Marina Držića 76, 10000, Zagreb, Croatia" \
-  --token YOUR_WOLT_REFRESH_TOKEN
-```
-
-Or via environment variable:
-```bash
-export WOLT_REFRESH_TOKEN=your_refresh_token
+# Authenticated (recommended) — real app pricing, via a refresh token
+export VAULT_WOLT_REFRESH_TOKEN="your_refresh_token_here"
 python3 wolt_analyzer.py "Avenija Marina Držića 76, 10000, Zagreb, Croatia"
+
+# Limit to the N nearest restaurants
+python3 wolt_analyzer.py "Address..." --limit 50
+
+# Custom output filename
+python3 wolt_analyzer.py "Address..." --output zagreb.csv
+
+# Pass a token inline instead of an env var
+python3 wolt_analyzer.py "Address..." --token "your_refresh_token_here"
+
+# Skip geocoding by supplying coordinates directly
+python3 wolt_analyzer.py "Any label" --lat 45.7921 --lon 16.0016
 ```
 
-### Limit to closest N restaurants (sorted before fetching pricing)
-```bash
-python3 wolt_analyzer.py "Avenija Marina Držića 76, 10000, Zagreb, Croatia" \
-  --num-restaurants 50
-```
+### CLI arguments
 
-### Full example (authenticated, 50 restaurants, custom output)
-```bash
-python3 wolt_analyzer.py "Avenija Marina Držića 76, 10000, Zagreb, Croatia" \
-  --token YOUR_WOLT_REFRESH_TOKEN \
-  --num-restaurants 50 \
-  --output zagreb_50.csv
-```
-
-The script will:
-1. Optionally authenticate and obtain a Bearer access token
-2. Geocode the address
-3. Fetch all available restaurants from the Wolt API
-4. Sort by Haversine distance; optionally limit to the N closest
-5. Retrieve dynamic pricing for each restaurant
-6. Export a sorted CSV (nearest restaurants first)
-
----
-
-## CLI Reference
-
-| Argument | Required | Default | Description |
+| Argument | Type | Default | Description |
 |---|---|---|---|
-| `address` | ✅ | — | Delivery address as a free-text string |
-| `--output FILE` | ❌ | `wolt_pricing_YYYYMMDD_HHMMSS.csv` | Output CSV filename |
-| `--token REFRESH_TOKEN` | ❌ | `$WOLT_REFRESH_TOKEN` env var | Wolt refresh token for authenticated requests |
-| `--num-restaurants N` | ❌ | all | Only process the N closest restaurants |
+| `address` | positional | *(required)* | Street address to geocode and scan. If `--lat`/`--lon` are given, this is just a label. |
+| `--output` | string | auto-timestamped | Output CSV filename. Defaults to `wolt_pricing_YYYYMMDD_HHMMSS.csv`. |
+| `--token` | string | None | Wolt refresh token (`__wrtoken`) passed inline. Highest priority source. |
+| `--limit` | int | None (all) | Process only the N nearest restaurants. Omit to process every venue. |
+| `--lat` | float | None | Latitude — bypasses geocoding when provided with `--lon`. |
+| `--lon` | float | None | Longitude — bypasses geocoding when provided with `--lat`. |
 
 ---
 
-## Authentication
+## Authentication & tokens
 
-When a refresh token is provided (via `--token` or the `WOLT_REFRESH_TOKEN` environment variable), the script:
+Wolt's public (unauthenticated) API returns **reduced public pricing** (6% service fee, €0.60/€1.69 caps). To get the **real app pricing** (10% service fee, €0.70/€2.99 caps, and the True delivery fee), the script authenticates with your Wolt account using a **refresh token**.
 
-1. Exchanges the refresh token for a short-lived Bearer access token via `POST https://authentication.wolt.com/v1/wauth2/access_token`
-2. Passes `Authorization: Bearer <access_token>` on **all** subsequent API calls
-3. Also sends `App-Language: en` and `Platform: Web` headers
+### Getting your refresh token
 
-If the token exchange fails, the script **falls back silently to unauthenticated mode** — no data is lost, but `service_fee_estimate` fields (where exposed by Wolt) will not be available.
+1. Log in to [wolt.com](https://wolt.com) (use your normal account).
+2. Open **DevTools** (F12) → **Application** tab (Chrome) / **Storage** tab (Firefox).
+3. Left sidebar → **Cookies** → `https://wolt.com`.
+4. Find the cookie named **`__wrtoken`** and copy its **Value**.
+5. Provide it to the script as a **raw string — no quotes, no `%22`/URL-encoding**.
 
-### Authenticated vs. unauthenticated differences
+### How the script finds a token (priority order)
 
-| Field | Unauthenticated | Authenticated |
-|---|---|---|
-| `service_fee_pct` | Inferred from `price_ranges` b-coefficient | From `service_fee_estimate.percentage` (if present) or same fallback |
-| `service_fee_min/max_eur` | Inferred from fixed-a price ranges | From `service_fee_estimate.min/max` (if present) or same fallback |
-| Delivery fee | Same (always uses `price_ranges` + Haversine) | Same |
-| Listings / dynamic data | Public data | Personalised/account-aware data where applicable |
+1. `--token` CLI flag
+2. `VAULT_WOLT_REFRESH_TOKEN` environment variable
+3. `.wolt_tokens.json` persisted file (written automatically — see below)
+
+If None are available, the script proceeds **unauthenticated** and reports public pricing.
+
+### Token rotation (important)
+
+Wolt's refresh token is **single-use and rotates on every exchange**. Each run swaps the old refresh token for a fresh access token *and* a new refresh token. The script handles this automatically:
+
+- The token exchange POSTs to `https://authentication.wolt.com/v1/wauth2/access_token` (form-urlencoded).
+- Immediately after a successful exchange, the **new** refresh token is persisted to `.wolt_tokens.json` (in the script directory, your home folder, or `/tmp` — whichever is writable).
+- On the next run, the persisted token is picked up automatically, so you don't have to re-fetch it every time.
+
+> Tip: If you store the seed token in `VAULT_WOLT_REFRESH_TOKEN`, update it occasionally with the rotated value in case `.wolt_tokens.json` is cleared.
 
 ---
 
-## How Fees Are Calculated
+## How fees are calculated
 
-### Delivery fee  *(corrected 2026-06-04 v2)*
+This is the part that took the most reverse-engineering, so here's exactly how each fee is derived.
 
-The delivery fee is now read from the **server-precomputed value** returned by the Wolt dynamic-pricing API, not recomputed client-side from `price_ranges`.
+### Delivery fee
 
-#### PRIMARY path — `original_delivery_price` (used whenever present)
+**Primary source — `original_delivery_price`.** Wolt's API pre-computes the exact delivery fee for the requested coordinates and exposes it at:
 
 ```
-venue_raw.delivery_specs.original_delivery_price  (integer CENTS → ÷ 100 = EUR)
+venue_raw.delivery_specs.original_delivery_price   (integer cents)
 ```
 
-This is the canonical fee Wolt shows in the app.  
-Validated live against the app:
+The script reads this directly and divides by 100. This is the figure shown in the Wolt app/website — no client-side distance math involved. Validated live against the app: Restoran Libertas → €0.55, Batak Savica → €0.79, Leggiero → €0.29.
 
-| Venue | `original_delivery_price` (¢) | Script output | App value | Match |
-|---|---|---|---|---|
-| Leggiero – Savica | 29 | €0.29 | €0.29 | ✓ |
-| Batak – Savica | 79 | €0.79 | €0.79 | ✓ |
-| Restoran Libertas | 55 | €0.55 | €0.55 | ✓ |
-
-#### FALLBACK path — `base_price + distance-tier a` (only when `original_delivery_price` is absent/null)
+**Fallback — base price + distance tier.** Only used when `original_delivery_price` is absent. The fee is computed as:
 
 ```
 delivery_fee_cents = base_price + tier.a
 ```
 
-where:
-- **`base_price`** — taken from `delivery_pricing_without_subscription.base_price` (base/non-subscriber rate, preferred) or `delivery_pricing.base_price` (authenticated subscriber rate, fallback)  
-- **`tier.a`** — the `a` field of the first `distance_ranges` tier whose `[min, max)` bracket contains the **Haversine distance** in metres  
-- Tier source preference: `delivery_pricing_without_subscription.distance_ranges` > `delivery_pricing.distance_ranges`
+where `base_price` and the `distance_ranges` tiers come from `delivery_pricing_without_subscription` (the **base / non-subscriber** rate, preferred) or `delivery_pricing` (subscriber / unauthenticated rate) if the former is absent. The matching tier is the one whose `[min, max)` bracket contains the **Haversine straight-line distance** in metres (`max == 0` means the final unbounded tier).
 
-#### ⚠ What was REMOVED
+> **Wolt+ note:** If you have a Wolt+ subscription, `delivery_pricing` reflects your *discounted* rate while `delivery_pricing_without_subscription` holds the *base* rate. The script reports the **base** fee so the output reflects standard market pricing, not your personal discount.
 
-`delivery_pricing.price_ranges` is **no longer used for the delivery fee**.  
-It was the previous (incorrect) source and produced wrong values when the account holds a Wolt+ subscription.
+### Service fee
 
-### Service fee  *(unchanged)*
+Read from the **`price_ranges`** array (this array is the *service fee* structure — it is **not** used for the delivery fee). It is indexed by basket value:
 
-Extracted from `delivery_pricing.price_ranges` — unaffected by this fix.
+- **Rate:** the first tier with `b > 0`; `b × 100` is the percentage (e.g. `0.1` → **10%**).
+- **Min / Max:** among the `b == 0` tiers, the smallest `a` is the minimum fee and the largest `a` is the maximum (cap), each divided by 100.
 
-The standard Croatian price-ranges structure:
+Authenticated, this yields **10% / min €0.70 / max €2.99**. Unauthenticated it falls back to the public **6% / €0.60 / €1.69** structure.
 
-| Tier | Basket range | Formula | Effective fee |
-|---|---|---|---|
-| Sliding min | €0.00 – €7.00 | `770 + (−1.0 × basket_¢)` | €7.70 → €0.70 |
-| Percentage | €7.00 – €29.90 | `10% × basket` | €0.70 → €2.99 |
-| Cap | > €29.90 | fixed €2.99 | €2.99 |
+### Minimum basket
 
-The script reports:
-- `service_fee_pct` = **10** (from the `b = 0.1` tiers)
-- `service_fee_max_eur` = **2.99** (from the fixed-`a` cap tier)
-- `service_fee_min_eur` = **2.99** (same tier — the €0.70 True minimum lives in the sliding tier and is not separately extracted; behaviour unchanged from all previous validated runs)
+Taken from the venue's order-minimum field (cents → EUR). The `minimum_basket_type` column indicates whether the minimum is a `sliding` surcharge threshold, a `blocked` hard minimum, or `None`.
 
 ### Distance
 
-`distance_m` is always the **Haversine straight-line distance** (metres) between the delivery address and the venue.  Both the delivery-fee fallback tier lookup and the `distance_m` CSV column use this value.
+`distance_m` is the **Haversine straight-line distance** (metres) between the delivery address and the venue coordinates. Note the venue location is stored as `[lon, lat]` (GeoJSON order).
 
-## CSV Output
+---
 
-The output file contains one row per restaurant with the following columns:
+## Output columns
+
+The CSV contains the following columns, in order:
 
 | Column | Description |
 |---|---|
-| `restaurant_name` | Display name of the restaurant |
-| `slug` | URL-safe identifier used by Wolt |
-| `address` | Restaurant street address |
-| `distance_m` | Haversine straight-line distance from delivery address in metres |
-| `currency` | Pricing currency (e.g. `EUR`) |
-| `online` | Whether the restaurant is currently accepting orders (`Yes`/`No`) |
-| `self_delivery` | Whether the restaurant uses its own delivery fleet (`Yes`/`No`) |
-| `delivery_estimate` | Estimated delivery time window (e.g. `25-35 min`) |
-| `delivery_fee_eur` | Delivery fee in EUR, computed from `price_ranges` + Haversine distance |
-| `service_fee_pct` | Service fee as a percentage of order value (e.g. `6`) |
-| `service_fee_min_eur` | Minimum service fee charged in EUR |
-| `service_fee_max_eur` | Maximum service fee cap in EUR |
-| `minimum_basket_eur` | Minimum order value in EUR |
-| `minimum_basket_type` | How the minimum is enforced: `sliding` (surcharge added), `blocked` (order rejected), or `None` |
+| `restaurant_name` | Venue name |
+| `slug` | Wolt venue slug (URL identifier) |
+| `address` | Venue street address |
+| `distance_m` | Haversine straight-line distance from delivery address (metres) |
+| `currency` | Currency code (extracted dynamically from the API) |
+| `online` | Whether the venue is currently online (Yes/No) |
+| `self_delivery` | Whether the venue self-delivers vs. uses Wolt's fleet (Yes/No) |
+| `delivery_estimate` | Estimated delivery time |
+| `delivery_fee_eur` | Delivery fee in EUR (primary: `original_delivery_price`; otherwise fallback) |
+| `original_delivery_price_eur` | The raw server-precomputed delivery price in EUR (blank when the field is absent and the fallback was used) |
+| `service_fee_pct` | Service fee rate (%) |
+| `service_fee_min_eur` | Service fee minimum (EUR) |
+| `service_fee_max_eur` | Service fee maximum / cap (EUR) |
+| `minimum_basket_eur` | Minimum basket size (EUR) |
+| `minimum_basket_type` | `sliding`, `blocked`, or `None` |
 
-### Example output
-
-| restaurant_name | distance_m | delivery_fee_eur | service_fee_pct | minimum_basket_eur | minimum_basket_type |
-|---|---|---|---|---|---|
-| Bistro Stara konoba | 1832 | 1.10 | 6 | 10.00 | None |
-| Grill & Pizza Stara Konoba | 1841 | 1.10 | 6 | 10.00 | None |
-| Catering Zlatna bula | 2187 | 0.00 | | 20.00 | None |
-| Grizli Catering | 3625 | 1.69 | 6 | 25.00 | None |
+Rows are sorted by `distance_m` ascending (nearest first).
 
 ---
 
-## Notes & Limitations
+## Example
 
-- **Rate limiting** — The Wolt API is a public-facing consumer API not intended for automated access. The script includes randomised delays (1.0–1.5 s) between requests to reduce the chance of hitting rate limits (HTTP 429). If you see 429 errors, increase the `RETRY_WAIT` constant or add longer sleep intervals.
-- **API changes** — Wolt's internal API endpoints are undocumented and may change at any time without notice. If the script stops working, inspect the network traffic on wolt.com and update the URL constants accordingly.
-- **Geographic coverage** — Results depend on your delivery address. Restaurants available in one city may differ significantly from another.
-- **Pricing accuracy** — Prices are fetched in real time and reflect Wolt's current configuration. Fees may vary by time of day, promotions, or user account status.
-- **Haversine vs. road distance** — Delivery fees are computed using straight-line distance (as Wolt's own `price_ranges` formula expects), not road routing distance.
-- **`service_fee_estimate` availability** — This field is only present in some markets/account configurations. The script gracefully falls back to `price_ranges` inference when it is absent.
+A validated sample run for `Avenija Marina Držića 76, 10000, Zagreb, Croatia` is included in [`example_output/zagreb_sample.csv`](example_output/zagreb_sample.csv).
 
 ---
 
-## License
+## Notes & limitations
 
-MIT License — see [LICENSE](LICENSE) for details.
+- **Rate limiting:** the script waits a random 1.0–1.5s between per-venue requests to be polite to Wolt's API. A full run of several hundred venues can take a while — use `--limit` for quick tests.
+- **Availability varies by time of day:** outside local opening hours, far fewer venues are online.
+- **Geocoding:** powered by the free Nominatim service; ambiguous addresses may resolve imprecisely. Use `--lat`/`--lon` to pin coordinates exactly.
+- **Public vs. authenticated pricing:** without a token, the service fee and some pricing reflect Wolt's reduced public rates rather than the real app pricing.
