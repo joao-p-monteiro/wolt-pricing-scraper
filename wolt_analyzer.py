@@ -258,13 +258,18 @@ def _get_json(url, params, headers):
 
 
 def fetch_dynamic_pricing(slug, lat, lon, headers):
-    url    = WOLT_DYNAMIC_URL.format(slug=slug)
-    params = {"lat": lat, "lon": lon}
-    data   = _get_json(url, params, headers)
-    if data is None:
-        time.sleep(RETRY_WAIT)
+    url       = WOLT_DYNAMIC_URL.format(slug=slug)
+    params    = {"lat": lat, "lon": lon}
+    base_wait = 2.0
+    for attempt in range(3):
         data = _get_json(url, params, headers)
-    return data
+        if data is not None:
+            return data
+        wait = base_wait * (2 ** attempt)
+        print(f"    [WARN] Dynamic fetch failed (attempt {attempt + 1}/3); "
+              f"retrying in {wait:.1f}s ...")
+        time.sleep(wait)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +426,6 @@ def extract_pricing(data):
         "minimum_basket_eur":          "",
         "minimum_basket_type":         "None",
         "self_delivery":               "No",
-        "original_delivery_price_eur": "",
     }
     if not data:
         return result
@@ -433,13 +437,24 @@ def extract_pricing(data):
     if b_positive:
         result["service_fee_pct"] = f"{round(b_positive[0].get('b', 0) * 100, 4):.4g}"
 
-    b_zero = [pr for pr in price_ranges
-              if isinstance(pr, dict) and (pr.get("b") or 0) == 0]
+    b_neg  = [pr for pr in price_ranges if isinstance(pr, dict) and (pr.get("b") or 0) < 0]
+    b_zero = [pr for pr in price_ranges if isinstance(pr, dict) and (pr.get("b") or 0) == 0]
+
+    # FLOOR / MINIMUM: primary = b<0 sliding tier evaluated at its upper basket bound
+    if b_neg:
+        bn = b_neg[0]
+        floor_cents = bn.get("a", 0) + bn.get("b", 0) * (bn.get("max") or 0)
+        result["service_fee_min_eur"] = f"{max(0, floor_cents) / 100:.2f}"
+    elif b_zero:
+        a_vals = [pr.get("a", 0) for pr in b_zero if pr.get("a") is not None]
+        if a_vals:
+            result["service_fee_min_eur"] = f"{min(a_vals) / 100:.2f}"
+
+    # CAP / MAXIMUM: highest a among b==0 tiers (unchanged)
     if b_zero:
-        a_values = [pr.get("a", 0) for pr in b_zero if pr.get("a") is not None]
-        if a_values:
-            result["service_fee_min_eur"] = f"{min(a_values) / 100:.2f}"
-            result["service_fee_max_eur"] = f"{max(a_values) / 100:.2f}"
+        a_vals = [pr.get("a", 0) for pr in b_zero if pr.get("a") is not None]
+        if a_vals:
+            result["service_fee_max_eur"] = f"{max(a_vals) / 100:.2f}"
 
     # Minimum basket
     min_basket_cents = None
@@ -508,7 +523,7 @@ def format_estimate(venue):
 CSV_COLUMNS = [
     "restaurant_name", "slug", "address", "distance_m", "currency",
     "online", "self_delivery", "delivery_estimate", "delivery_fee_eur",
-    "original_delivery_price_eur",
+    "delivery_fee_source",
     "service_fee_pct", "service_fee_min_eur", "service_fee_max_eur",
     "minimum_basket_eur", "minimum_basket_type",
 ]
@@ -537,7 +552,7 @@ def build_row(venue, pricing, user_lat, user_lon):
         "self_delivery":               pricing.get("self_delivery", "No"),
         "delivery_estimate":           format_estimate(venue),
         "delivery_fee_eur":            delivery_fee_eur,
-        "original_delivery_price_eur": pricing.get("original_delivery_price_eur", ""),
+        "delivery_fee_source":         pricing.get("delivery_fee_source", ""),
         "service_fee_pct":             pricing.get("service_fee_pct", ""),
         "service_fee_min_eur":         pricing.get("service_fee_min_eur", ""),
         "service_fee_max_eur":         pricing.get("service_fee_max_eur", ""),
@@ -606,7 +621,10 @@ def main():
     for idx, venue in enumerate(venues, start=1):
         name = venue.get("name", venue.get("slug", "?"))
         print(f"  [{idx}/{len(venues)}] {name} ...")
-        time.sleep(random.uniform(1.0, 1.5))
+        time.sleep(random.uniform(1.5, 2.5))
+        if idx % 10 == 0:
+            print(f"    [throttle] Extra 3s pause after venue {idx} ...")
+            time.sleep(3.0)
 
         loc = venue.get("location", [None, None])
         venue_lon_val = loc[0] if isinstance(loc, (list, tuple)) and len(loc) == 2 else None
@@ -621,7 +639,7 @@ def main():
                 "service_fee_pct": "", "service_fee_min_eur": "",
                 "service_fee_max_eur": "", "minimum_basket_eur": "",
                 "minimum_basket_type": "None", "self_delivery": "No",
-                "original_delivery_price_eur": "",
+                "delivery_fee_source": "",
                 "delivery_fee_eur": f"{venue.get('delivery_price_int', 0) / 100:.2f}",
             }
         else:
@@ -633,30 +651,83 @@ def main():
             odp_cents = _get_original_delivery_price(data)
 
             if odp_cents is not None:
-                pricing["delivery_fee_eur"]            = f"{odp_cents / 100:.2f}"
-                pricing["original_delivery_price_eur"] = f"{odp_cents / 100:.2f}"
-                fee_source = "primary:original_delivery_price"
+                pricing["delivery_fee_eur"]    = f"{odp_cents / 100:.2f}"
+                pricing["delivery_fee_source"] = "primary:original_delivery_price"
             else:
                 base_price, dist_ranges, src = _get_delivery_pricing_for_fallback(data)
-                pricing["original_delivery_price_eur"] = ""
                 if dist_ranges:
                     fee_cents = _compute_fallback_delivery_fee(base_price, dist_ranges, hav_dist)
-                    pricing["delivery_fee_eur"] = f"{fee_cents / 100:.2f}"
-                    fee_source = f"fallback:{src}"
+                    pricing["delivery_fee_eur"]    = f"{fee_cents / 100:.2f}"
+                    pricing["delivery_fee_source"] = f"fallback:{src}"
                 else:
                     fb = venue.get("delivery_price_int", 0) or 0
-                    pricing["delivery_fee_eur"] = f"{fb / 100:.2f}"
-                    fee_source = "fallback:listing_price_int"
+                    pricing["delivery_fee_eur"]    = f"{fb / 100:.2f}"
+                    pricing["delivery_fee_source"] = "fallback:listing_price_int"
 
             print(
                 f"    hav={hav_dist}m  fee=EUR{pricing['delivery_fee_eur']}"
-                f"  [{fee_source}]"
+                f"  [{pricing['delivery_fee_source']}]"
                 f"  svc={pricing.get('service_fee_pct', '?')}%"
                 f"  svc_min=EUR{pricing.get('service_fee_min_eur', '?')}"
                 f"  svc_max=EUR{pricing.get('service_fee_max_eur', '?')}"
             )
 
         rows.append(build_row(venue, pricing, lat, lon))
+
+    # ------------------------------------------------------------------
+    # Post-run retry pass: re-fetch venues whose pricing is blank (429s)
+    # ------------------------------------------------------------------
+    failed_indices = [i for i, r in enumerate(rows) if not r.get("service_fee_pct")]
+    if failed_indices:
+        print(f"\n[RETRY] {len(failed_indices)} venue(s) missing pricing data; "
+              f"waiting 30s before retry ...")
+        time.sleep(30.0)
+        for i in failed_indices:
+            row  = rows[i]
+            slug = row["slug"]
+            name = row["restaurant_name"]
+            print(f"  [RETRY] {name} ({slug}) ...")
+            time.sleep(random.uniform(1.5, 2.5))
+
+            venue_match = next((v for v in venues if v.get("slug") == slug), None)
+            if venue_match is None:
+                continue
+
+            loc_r  = venue_match.get("location", [None, None])
+            v_lon_r = loc_r[0] if isinstance(loc_r, (list, tuple)) and len(loc_r) == 2 else None
+            v_lat_r = loc_r[1] if isinstance(loc_r, (list, tuple)) and len(loc_r) == 2 else None
+            hav_dist_r = (haversine(lat, lon, float(v_lat_r), float(v_lon_r))
+                          if v_lat_r is not None else 0)
+
+            data2 = fetch_dynamic_pricing(slug, lat, lon, auth_headers)
+            if data2 is None:
+                print(f"    [RETRY] Still failed for {name}; keeping blank row.")
+                continue
+
+            pricing2 = extract_pricing(data2)
+            odp2 = _get_original_delivery_price(data2)
+            if odp2 is not None:
+                pricing2["delivery_fee_eur"]    = f"{odp2 / 100:.2f}"
+                pricing2["delivery_fee_source"] = "primary:original_delivery_price"
+            else:
+                bp2, dr2, src2 = _get_delivery_pricing_for_fallback(data2)
+                if dr2:
+                    fc2 = _compute_fallback_delivery_fee(bp2, dr2, hav_dist_r)
+                    pricing2["delivery_fee_eur"]    = f"{fc2 / 100:.2f}"
+                    pricing2["delivery_fee_source"] = f"fallback:{src2}"
+                else:
+                    fb2 = venue_match.get("delivery_price_int", 0) or 0
+                    pricing2["delivery_fee_eur"]    = f"{fb2 / 100:.2f}"
+                    pricing2["delivery_fee_source"] = "fallback:listing_price_int"
+
+            rows[i] = build_row(venue_match, pricing2, lat, lon)
+            print(
+                f"    [RETRY] OK: fee=EUR{pricing2['delivery_fee_eur']}"
+                f"  [{pricing2['delivery_fee_source']}]"
+                f"  svc={pricing2.get('service_fee_pct', '?')}%"
+                f"  svc_min=EUR{pricing2.get('service_fee_min_eur', '?')}"
+                f"  svc_max=EUR{pricing2.get('service_fee_max_eur', '?')}"
+            )
 
     export_csv(rows, output_path)
     print(f"\nDone! {len(rows)} restaurants -> {output_path}")
