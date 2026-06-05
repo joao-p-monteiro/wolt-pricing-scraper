@@ -29,6 +29,7 @@ import json
 import math
 import os
 import random
+import ssl
 import time
 import urllib.parse
 import urllib.request as _urllib_request
@@ -59,6 +60,35 @@ HEADERS = {
 
 REQUEST_TIMEOUT = 15
 RETRY_WAIT      = 2.0
+
+
+# ---------------------------------------------------------------------------
+# SSL context helper (macOS python.org Python fix)
+# ---------------------------------------------------------------------------
+
+def _build_ssl_context():
+    """Return an SSL context that *verifies* certificates.
+
+    On macOS with a python.org Python 3.x build, urllib cannot locate the
+    system root CAs and every HTTPS call raises::
+
+        [SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate
+
+    Installing *certifi* and using its CA bundle fixes this without disabling
+    verification.  If certifi is absent the function falls back to the system
+    default context, which still verifies certificates on Linux / Windows and
+    on properly-configured macOS installations.
+
+    NEVER set check_hostname=False or CERT_NONE here.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
+_SSL_CTX = _build_ssl_context()
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +176,7 @@ def exchange_refresh_token(refresh_token):
         method="POST",
     )
     try:
-        with _urllib_request.urlopen(req, timeout=REQUEST_TIMEOUT) as r:
+        with _urllib_request.urlopen(req, timeout=REQUEST_TIMEOUT, context=_SSL_CTX) as r:
             body = json.loads(r.read())
         at  = body.get("access_token", "").strip()
         nrt = body.get("refresh_token", "").strip()
