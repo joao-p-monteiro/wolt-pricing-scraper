@@ -635,9 +635,9 @@ def parse_args():
     parser.add_argument("--resume",         action="store_true", default=False,
                         help="Resume from .partial.jsonl checkpoint (skip already-scanned venues)")
     parser.add_argument("--cooldown-after", type=int,   default=3,
-                        help="Consecutive venue failures before triggering adaptive cooldown (default 3)")
+                        help="Consecutive venue failures before the script stops gracefully so you can resume later (default 3)")
     parser.add_argument("--cooldown-secs",  type=int,   default=90,
-                        help="Base cooldown duration in seconds when rate limiter trips (default 90)")
+                        help="(deprecated; no longer used)")
     return parser.parse_args()
 
 
@@ -719,12 +719,10 @@ def main():
     rows = []
     restaurants_scanned = 0
 
-    # -- Adaptive cooldown state -------------------------------------------
-    consec_failures     = 0                    # consecutive venue-level failures
-    cooldowns_triggered = 0                    # total cooldown events this run
-    cooldown_base       = args.cooldown_secs   # escalates: base -> 2x -> 300s
-    cooldown_threshold  = args.cooldown_after  # failures before triggering cooldown
-    cooldown_dur        = cooldown_base        # current cooldown duration (updated per event)
+    # -- Rate-limit stop state ---------------------------------------------
+    consec_failures    = 0                    # consecutive venue-level failures
+    cooldown_threshold = args.cooldown_after  # failures before graceful stop
+    rate_limited_stop  = False                # set True when limiter is tripped
 
     for idx, venue in enumerate(venues, start=1):
         name = venue.get("name", venue.get("slug", "?"))
@@ -744,7 +742,7 @@ def main():
 
         data = fetch_dynamic_pricing(venue["slug"], lat, lon, auth_headers)
 
-        # Track consecutive failures to drive the adaptive cooldown below
+        # Track consecutive failures for graceful stop
         if data is None:
             consec_failures += 1
         else:
@@ -792,33 +790,26 @@ def main():
             with open(partial_path, "a", encoding="utf-8") as _cpfh:
                 _cpfh.write(json.dumps(rows[-1]) + "\n")
 
-        # Adaptive global cooldown: when consecutive failures hit the threshold,
-        # the per-IP rate limiter has almost certainly tripped; sleep long and
-        # CONTINUE (do not abort) so the tail of the run can still succeed.
+        # Graceful stop: when consecutive failures hit the threshold, the per-IP
+        # rate limiter has almost certainly tripped; stop cleanly so everything
+        # saved so far is intact and the user can resume later.
         if consec_failures >= cooldown_threshold:
-            cooldowns_triggered += 1
-            if cooldowns_triggered == 1:
-                cooldown_dur = cooldown_base             # e.g. 90 s
-            elif cooldowns_triggered == 2:
-                cooldown_dur = min(cooldown_base * 2, 300)  # e.g. 180 s
-            else:
-                cooldown_dur = 300                       # cap at 300 s
+            rate_limited_stop = True
             print(
-                f"[cooldown] Rate limiter likely tripped after {consec_failures} consecutive "
-                f"failures — pausing {cooldown_dur}s to let it reset ..."
+                f"\n[STOP] Wolt's rate limiter has tripped after {consec_failures} consecutive "
+                f"failures (venue {idx}/{len(venues)}).\n"
+                f"       Everything scanned so far has been saved. Wolt blocks by IP for a while \u2014\n"
+                f"       wait ~15\u201330 minutes, then resume exactly where you left off with:\n"
+                f"         python3 wolt_analyzer.py \"{args.address}\" --token \"<fresh __wrtoken>\" --resume\n"
+                f"       (Use a FRESH __wrtoken if the current one has rotated.)"
             )
-            time.sleep(cooldown_dur)
-            consec_failures = 0  # reset counter after cooldown; keep looping
+            break
 
     # ------------------------------------------------------------------
     # Post-run retry pass: re-fetch venues whose pricing is blank (429s)
     # ------------------------------------------------------------------
     failed_indices = [i for i, r in enumerate(rows) if not r.get("service_fee_pct")]
-    if failed_indices:
-        # Single long cooldown so the rate limiter fully resets before the retry pass
-        print(f"\n[RETRY-COOLDOWN] {len(failed_indices)} venue(s) need retry; "
-              f"pausing {cooldown_dur}s to let the rate limiter reset ...")
-        time.sleep(cooldown_dur)
+    if failed_indices and not rate_limited_stop:
         print(f"[RETRY] {len(failed_indices)} venue(s) missing pricing data; "
               f"waiting 30s before retry ...")
         time.sleep(30.0)
@@ -891,7 +882,7 @@ def main():
         f"| **Restaurants requested** | {restaurants_requested} |\n"
         f"| **Restaurants scanned** | {restaurants_scanned} |\n"
         f"| **Success rate** | {success_rate:.1f}% |\n"
-        f"| **Cooldowns triggered** | {cooldowns_triggered} |\n"
+        f"| **Run status** | {'STOPPED (rate-limited \u2014 resume with --resume)' if rate_limited_stop else 'COMPLETE'} |\n"
         f"| **Venues skipped via --resume** | {venues_skipped_resume} |\n"
         f"| **CSV file** | {csv_filename} |\n"
     )
