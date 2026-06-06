@@ -109,8 +109,17 @@ def haversine(lat1, lon1, lat2, lon2):
 # Geocoding
 # ---------------------------------------------------------------------------
 
+def _extract_city(addr_obj):
+    """Return the best city string from a Nominatim addressdetails object."""
+    for key in ("city", "town", "village", "municipality", "county", "state"):
+        val = addr_obj.get(key, "")
+        if val:
+            return val
+    return "unknown-city"
+
+
 def geocode(address):
-    params = {"q": address, "format": "json", "limit": 1}
+    params = {"q": address, "format": "json", "limit": 1, "addressdetails": 1}
     try:
         resp = requests.get(NOMINATIM_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
@@ -121,7 +130,9 @@ def geocode(address):
     if not results:
         print(f"[ERROR] No geocoding results for: {address!r}")
         raise SystemExit(1)
-    return float(results[0]["lat"]), float(results[0]["lon"])
+    addr_obj = results[0].get("address", {})
+    city = _extract_city(addr_obj)
+    return float(results[0]["lat"]), float(results[0]["lon"]), city
 
 
 # ---------------------------------------------------------------------------
@@ -550,10 +561,19 @@ def format_estimate(venue):
     return ""
 
 
+def slugify(text):
+    """Lowercase slug: spaces/apostrophes/commas -> hyphens; strip non [a-z0-9-]."""
+    import re as _re
+    s = text.lower()
+    s = _re.sub(r"[\s',’,]+", "-", s)
+    s = _re.sub(r"[^a-z0-9-]", "", s)
+    s = _re.sub(r"-{2,}", "-", s)
+    return s.strip("-")
+
+
 CSV_COLUMNS = [
     "restaurant_name", "slug", "address", "distance_m", "currency",
     "online", "self_delivery", "delivery_estimate", "delivery_fee_eur",
-    "delivery_fee_source",
     "service_fee_pct", "service_fee_min_eur", "service_fee_max_eur",
     "minimum_basket_eur", "minimum_basket_type",
 ]
@@ -582,7 +602,6 @@ def build_row(venue, pricing, user_lat, user_lon):
         "self_delivery":               pricing.get("self_delivery", "No"),
         "delivery_estimate":           format_estimate(venue),
         "delivery_fee_eur":            delivery_fee_eur,
-        "delivery_fee_source":         pricing.get("delivery_fee_source", ""),
         "service_fee_pct":             pricing.get("service_fee_pct", ""),
         "service_fee_min_eur":         pricing.get("service_fee_min_eur", ""),
         "service_fee_max_eur":         pricing.get("service_fee_max_eur", ""),
@@ -621,33 +640,58 @@ def parse_args():
 
 def main():
     args = parse_args()
-    output_path = args.output or f"wolt_pricing_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
     print("\nAuthenticating with Wolt ...")
     access_token, auth_headers = resolve_auth(cli_token=args.token)
     if access_token:
+        auth_status = "authenticated"
         print("  -> Authenticated: PRIMARY original_delivery_price; "
               "FALLBACK base_price + distance-tier-a (without_subscription preferred).\n")
     else:
+        auth_status = "unauthenticated fallback"
         print("  -> Unauthenticated: delivery_pricing fallback used.\n")
 
+    # ── Geocode / coordinates ────────────────────────────────────────────────
     if args.lat is not None and args.lon is not None:
         lat, lon = args.lat, args.lon
+        city = "unknown-city"
         print(f"Using override coordinates: lat={lat}, lon={lon}\n")
     else:
         print(f"Geocoding: {args.address!r} ...")
-        lat, lon = geocode(args.address)
-        print(f"  -> lat={lat:.6f}, lon={lon:.6f}\n")
+        lat, lon, city = geocode(args.address)
+        print(f"  -> lat={lat:.6f}, lon={lon:.6f}  city={city!r}\n")
 
+    # ── Build output folder/name ─────────────────────────────────────────────
+    run_dt = datetime.now()
+    if args.output:
+        # User supplied an explicit override: treat it as the base path
+        base_path = args.output.rstrip("/").rstrip("\\")
+        folder = base_path if not base_path.endswith(".csv") else os.path.dirname(base_path) or "."
+        base_name = os.path.splitext(os.path.basename(base_path))[0]
+    else:
+        street_number = args.address.split(",")[0].strip()
+        date_str = run_dt.strftime("%Y-%m-%d")
+        base_name = f"{date_str}_{slugify(city)}_{slugify(street_number)}"
+        folder = base_name
+
+    os.makedirs(folder, exist_ok=True)
+    csv_filename = f"{base_name}.csv"
+    csv_path = os.path.join(folder, csv_filename)
+    log_path  = os.path.join(folder, f"{base_name}_log.md")
+
+    # ── Fetch listings ───────────────────────────────────────────────────────
     print("Fetching restaurant listings ...")
     venues = fetch_listings(lat, lon, auth_headers)
-    print(f"  -> {len(venues)} unique restaurants found.\n")
+    restaurants_available = len(venues)
+    print(f"  -> {restaurants_available} unique restaurants found.\n")
     if not venues:
         raise SystemExit(0)
     if args.limit:
         venues = venues[:args.limit]
+    restaurants_requested = len(venues)
 
     rows = []
+    restaurants_scanned = 0
     for idx, venue in enumerate(venues, start=1):
         name = venue.get("name", venue.get("slug", "?"))
         print(f"  [{idx}/{len(venues)}] {name} ...")
@@ -669,7 +713,6 @@ def main():
                 "service_fee_pct": "", "service_fee_min_eur": "",
                 "service_fee_max_eur": "", "minimum_basket_eur": "",
                 "minimum_basket_type": "None", "self_delivery": "No",
-                "delivery_fee_source": "",
                 "delivery_fee_eur": f"{venue.get('delivery_price_int', 0) / 100:.2f}",
             }
         else:
@@ -682,25 +725,23 @@ def main():
 
             if odp_cents is not None:
                 pricing["delivery_fee_eur"]    = f"{odp_cents / 100:.2f}"
-                pricing["delivery_fee_source"] = "primary:original_delivery_price"
             else:
                 base_price, dist_ranges, src = _get_delivery_pricing_for_fallback(data)
                 if dist_ranges:
                     fee_cents = _compute_fallback_delivery_fee(base_price, dist_ranges, hav_dist)
                     pricing["delivery_fee_eur"]    = f"{fee_cents / 100:.2f}"
-                    pricing["delivery_fee_source"] = f"fallback:{src}"
                 else:
                     fb = venue.get("delivery_price_int", 0) or 0
                     pricing["delivery_fee_eur"]    = f"{fb / 100:.2f}"
-                    pricing["delivery_fee_source"] = "fallback:listing_price_int"
 
             print(
                 f"    hav={hav_dist}m  fee=EUR{pricing['delivery_fee_eur']}"
-                f"  [{pricing['delivery_fee_source']}]"
                 f"  svc={pricing.get('service_fee_pct', '?')}%"
                 f"  svc_min=EUR{pricing.get('service_fee_min_eur', '?')}"
                 f"  svc_max=EUR{pricing.get('service_fee_max_eur', '?')}"
             )
+            if pricing.get("service_fee_pct"):
+                restaurants_scanned += 1
 
         rows.append(build_row(venue, pricing, lat, lon))
 
@@ -738,29 +779,52 @@ def main():
             odp2 = _get_original_delivery_price(data2)
             if odp2 is not None:
                 pricing2["delivery_fee_eur"]    = f"{odp2 / 100:.2f}"
-                pricing2["delivery_fee_source"] = "primary:original_delivery_price"
             else:
                 bp2, dr2, src2 = _get_delivery_pricing_for_fallback(data2)
                 if dr2:
                     fc2 = _compute_fallback_delivery_fee(bp2, dr2, hav_dist_r)
                     pricing2["delivery_fee_eur"]    = f"{fc2 / 100:.2f}"
-                    pricing2["delivery_fee_source"] = f"fallback:{src2}"
                 else:
                     fb2 = venue_match.get("delivery_price_int", 0) or 0
                     pricing2["delivery_fee_eur"]    = f"{fb2 / 100:.2f}"
-                    pricing2["delivery_fee_source"] = "fallback:listing_price_int"
+
+            if pricing2.get("service_fee_pct"):
+                restaurants_scanned += 1
 
             rows[i] = build_row(venue_match, pricing2, lat, lon)
             print(
                 f"    [RETRY] OK: fee=EUR{pricing2['delivery_fee_eur']}"
-                f"  [{pricing2['delivery_fee_source']}]"
                 f"  svc={pricing2.get('service_fee_pct', '?')}%"
                 f"  svc_min=EUR{pricing2.get('service_fee_min_eur', '?')}"
                 f"  svc_max=EUR{pricing2.get('service_fee_max_eur', '?')}"
             )
 
-    export_csv(rows, output_path)
-    print(f"\nDone! {len(rows)} restaurants -> {output_path}")
+    # ── Export CSV ───────────────────────────────────────────────────────────
+    export_csv(rows, csv_path)
+    print(f"\nDone! {len(rows)} restaurants -> {csv_path}")
+
+    # ── Write Markdown run log ───────────────────────────────────────────────
+    success_rate = (restaurants_scanned / restaurants_requested * 100
+                    if restaurants_requested > 0 else 0.0)
+    log_dt_str = run_dt.strftime("%Y-%m-%d %H:%M:%S")
+    md_content = (
+        f"# Wolt Pricing Scraper — Run Log\n\n"
+        f"| Field | Value |\n"
+        f"|---|---|\n"
+        f"| **Run date/time** | {log_dt_str} |\n"
+        f"| **Input address** | {args.address} |\n"
+        f"| **Resolved city** | {city} |\n"
+        f"| **Coordinates** | lat={lat:.6f}, lon={lon:.6f} |\n"
+        f"| **Auth status** | {auth_status} |\n"
+        f"| **Restaurants available** | {restaurants_available} |\n"
+        f"| **Restaurants requested** | {restaurants_requested} |\n"
+        f"| **Restaurants scanned** | {restaurants_scanned} |\n"
+        f"| **Success rate** | {success_rate:.1f}% |\n"
+        f"| **CSV file** | {csv_filename} |\n"
+    )
+    with open(log_path, "w", encoding="utf-8") as fh:
+        fh.write(md_content)
+    print(f"Run log -> {log_path}")
 
 
 if __name__ == "__main__":
