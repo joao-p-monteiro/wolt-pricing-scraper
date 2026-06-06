@@ -638,6 +638,12 @@ def parse_args():
                         help="Consecutive venue failures before the script stops gracefully so you can resume later (default 3)")
     parser.add_argument("--cooldown-secs",  type=int,   default=90,
                         help="(deprecated; no longer used)")
+    parser.add_argument("--auto-resume",            action="store_true", default=False,
+                        help="Automatically resume after rate-limit trips until complete.")
+    parser.add_argument("--auto-resume-wait",       type=float, default=20.0,
+                        help="Minutes to wait between auto-resume cycles (default 20).")
+    parser.add_argument("--auto-resume-max-cycles", type=int,   default=8,
+                        help="Maximum auto-resume cycles before giving up (default 8).")
     return parser.parse_args()
 
 
@@ -647,16 +653,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+    _cli_token = args.token  # preserve original; may be nulled in later cycles
 
-    print("\nAuthenticating with Wolt ...")
-    access_token, auth_headers = resolve_auth(cli_token=args.token)
-    if access_token:
-        auth_status = "authenticated"
-        print("  -> Authenticated: PRIMARY original_delivery_price; "
-              "FALLBACK base_price + distance-tier-a (without_subscription preferred).\n")
-    else:
-        auth_status = "unauthenticated fallback"
-        print("  -> Unauthenticated: delivery_pricing fallback used.\n")
+    access_token, auth_headers = resolve_auth(cli_token=_cli_token)
 
     # ── Geocode / coordinates ────────────────────────────────────────────────
     if args.lat is not None and args.lon is not None:
@@ -698,197 +697,245 @@ def main():
         venues = venues[:args.limit]
     restaurants_requested = len(venues)
 
-    # -- Checkpoint / resume -----------------------------------------------
-    resumed_rows          = []       # rows already done in a previous run
-    resumed_slugs         = set()
-    venues_skipped_resume = 0
-    if args.resume and os.path.exists(partial_path):
-        with open(partial_path, "r", encoding="utf-8") as _fh:
-            for _line in _fh:
-                _line = _line.strip()
-                if _line:
-                    _obj = json.loads(_line)
-                    resumed_rows.append(_obj)
-                    resumed_slugs.add(_obj.get("slug", ""))
-        venues_skipped_resume = len(resumed_slugs)
-        if venues_skipped_resume:
-            print(f"[resume] Skipping {venues_skipped_resume} already-scanned venues "
-                  f"from checkpoint.")
-            venues = [v for v in venues if v.get("slug") not in resumed_slugs]
+    _venues_limited = list(venues)  # snapshot before loop so each cycle can reset
+    # -- Auto-resume loop -------------------------------------------------
+    _auto_cycle = 0
+    _auto_max   = args.auto_resume_max_cycles
+    _auto_wait  = args.auto_resume_wait
 
-    rows = []
-    restaurants_scanned = 0
+    while True:
+        _auto_cycle += 1
 
-    # -- Rate-limit stop state ---------------------------------------------
-    consec_failures    = 0                    # consecutive venue-level failures
-    cooldown_threshold = args.cooldown_after  # failures before graceful stop
-    rate_limited_stop  = False                # set True when limiter is tripped
-
-    for idx, venue in enumerate(venues, start=1):
-        name = venue.get("name", venue.get("slug", "?"))
-        print(f"  [{idx}/{len(venues)}] {name} ...")
-        time.sleep(random.uniform(1.5, 2.5))
-        if idx % 10 == 0:
-            # Scale up periodic pause for large runs (>200 venues) to ease rate-limit pressure
-            _extra = 5.0 if len(venues) > 200 else 3.0
-            print(f"    [throttle] Extra {_extra:.0f}s pause after venue {idx} ...")
-            time.sleep(_extra)
-
-        loc = venue.get("location", [None, None])
-        venue_lon_val = loc[0] if isinstance(loc, (list, tuple)) and len(loc) == 2 else None
-        venue_lat_val = loc[1] if isinstance(loc, (list, tuple)) and len(loc) == 2 else None
-        hav_dist = (haversine(lat, lon, float(venue_lat_val), float(venue_lon_val))
-                    if venue_lat_val is not None else 0)
-
-        data = fetch_dynamic_pricing(venue["slug"], lat, lon, auth_headers)
-
-        # Track consecutive failures for graceful stop
-        if data is None:
-            consec_failures += 1
+        # Re-auth each cycle; cycle >= 2 nulls CLI token to use rotated
+        # .wolt_tokens.json written by the previous cycle's token exchange.
+        if _auto_cycle >= 2:
+            _cli_token = None
+        print("\nAuthenticating with Wolt ...")
+        access_token, auth_headers = resolve_auth(cli_token=_cli_token)
+        if access_token:
+            auth_status = "authenticated"
+            print("  -> Authenticated: PRIMARY original_delivery_price; "
+                  "FALLBACK base_price + distance-tier-a (without_subscription preferred).\n")
         else:
-            consec_failures = 0
+            auth_status = "unauthenticated fallback"
+            print("  -> Unauthenticated: delivery_pricing fallback used.\n")
 
-        if data is None:
-            pricing = {
-                "service_fee_pct": "", "service_fee_min_eur": "",
-                "service_fee_max_eur": "", "minimum_basket_eur": "",
-                "minimum_basket_type": "None", "self_delivery": "No",
-                "delivery_fee_eur": f"{venue.get('delivery_price_int', 0) / 100:.2f}",
-            }
-        else:
-            pricing = extract_pricing(data)
+        # Reset venue list for this cycle (checkpoint will filter done slugs)
+        if _auto_cycle >= 2:
+            venues = list(_venues_limited)
 
-            # ------------------------------------------------------------------
-            # DELIVERY FEE: PRIMARY original_delivery_price -> FALLBACK tier-a
-            # ------------------------------------------------------------------
-            odp_cents = _get_original_delivery_price(data)
 
-            if odp_cents is not None:
-                pricing["delivery_fee_eur"]    = f"{odp_cents / 100:.2f}"
+        # -- Checkpoint / resume -----------------------------------------------
+        resumed_rows          = []       # rows already done in a previous run
+        resumed_slugs         = set()
+        venues_skipped_resume = 0
+        _do_resume = args.resume or (args.auto_resume and _auto_cycle > 1)
+        if _do_resume and os.path.exists(partial_path):
+            with open(partial_path, "r", encoding="utf-8") as _fh:
+                for _line in _fh:
+                    _line = _line.strip()
+                    if _line:
+                        _obj = json.loads(_line)
+                        resumed_rows.append(_obj)
+                        resumed_slugs.add(_obj.get("slug", ""))
+            venues_skipped_resume = len(resumed_slugs)
+            if venues_skipped_resume:
+                print(f"[resume] Skipping {venues_skipped_resume} already-scanned venues "
+                      f"from checkpoint.")
+                venues = [v for v in venues if v.get("slug") not in resumed_slugs]
+    
+        rows = []
+        restaurants_scanned = 0
+    
+        # -- Rate-limit stop state ---------------------------------------------
+        consec_failures    = 0                    # consecutive venue-level failures
+        cooldown_threshold = args.cooldown_after  # failures before graceful stop
+        rate_limited_stop  = False                # set True when limiter is tripped
+    
+        for idx, venue in enumerate(venues, start=1):
+            name = venue.get("name", venue.get("slug", "?"))
+            print(f"  [{idx}/{len(venues)}] {name} ...")
+            time.sleep(random.uniform(1.5, 2.5))
+            if idx % 10 == 0:
+                # Scale up periodic pause for large runs (>200 venues) to ease rate-limit pressure
+                _extra = 5.0 if len(venues) > 200 else 3.0
+                print(f"    [throttle] Extra {_extra:.0f}s pause after venue {idx} ...")
+                time.sleep(_extra)
+    
+            loc = venue.get("location", [None, None])
+            venue_lon_val = loc[0] if isinstance(loc, (list, tuple)) and len(loc) == 2 else None
+            venue_lat_val = loc[1] if isinstance(loc, (list, tuple)) and len(loc) == 2 else None
+            hav_dist = (haversine(lat, lon, float(venue_lat_val), float(venue_lon_val))
+                        if venue_lat_val is not None else 0)
+    
+            data = fetch_dynamic_pricing(venue["slug"], lat, lon, auth_headers)
+    
+            # Track consecutive failures for graceful stop
+            if data is None:
+                consec_failures += 1
             else:
-                base_price, dist_ranges, src = _get_delivery_pricing_for_fallback(data)
-                if dist_ranges:
-                    fee_cents = _compute_fallback_delivery_fee(base_price, dist_ranges, hav_dist)
-                    pricing["delivery_fee_eur"]    = f"{fee_cents / 100:.2f}"
+                consec_failures = 0
+    
+            if data is None:
+                pricing = {
+                    "service_fee_pct": "", "service_fee_min_eur": "",
+                    "service_fee_max_eur": "", "minimum_basket_eur": "",
+                    "minimum_basket_type": "None", "self_delivery": "No",
+                    "delivery_fee_eur": f"{venue.get('delivery_price_int', 0) / 100:.2f}",
+                }
+            else:
+                pricing = extract_pricing(data)
+    
+                # ------------------------------------------------------------------
+                # DELIVERY FEE: PRIMARY original_delivery_price -> FALLBACK tier-a
+                # ------------------------------------------------------------------
+                odp_cents = _get_original_delivery_price(data)
+    
+                if odp_cents is not None:
+                    pricing["delivery_fee_eur"]    = f"{odp_cents / 100:.2f}"
                 else:
-                    fb = venue.get("delivery_price_int", 0) or 0
-                    pricing["delivery_fee_eur"]    = f"{fb / 100:.2f}"
+                    base_price, dist_ranges, src = _get_delivery_pricing_for_fallback(data)
+                    if dist_ranges:
+                        fee_cents = _compute_fallback_delivery_fee(base_price, dist_ranges, hav_dist)
+                        pricing["delivery_fee_eur"]    = f"{fee_cents / 100:.2f}"
+                    else:
+                        fb = venue.get("delivery_price_int", 0) or 0
+                        pricing["delivery_fee_eur"]    = f"{fb / 100:.2f}"
+    
+                print(
+                    f"    hav={hav_dist}m  fee=EUR{pricing['delivery_fee_eur']}"
+                    f"  svc={pricing.get('service_fee_pct', '?')}%"
+                    f"  svc_min=EUR{pricing.get('service_fee_min_eur', '?')}"
+                    f"  svc_max=EUR{pricing.get('service_fee_max_eur', '?')}"
+                )
+                if pricing.get("service_fee_pct"):
+                    restaurants_scanned += 1
+    
+            rows.append(build_row(venue, pricing, lat, lon))
+    
+            # Checkpoint: persist each successfully fetched row so --resume can skip it
+            if data is not None:
+                with open(partial_path, "a", encoding="utf-8") as _cpfh:
+                    _cpfh.write(json.dumps(rows[-1]) + "\n")
+    
+            # Graceful stop: when consecutive failures hit the threshold, the per-IP
+            # rate limiter has almost certainly tripped; stop cleanly so everything
+            # saved so far is intact and the user can resume later.
+            if consec_failures >= cooldown_threshold:
+                rate_limited_stop = True
+                print(
+                    f"\n[STOP] Wolt's rate limiter has tripped after {consec_failures} consecutive "
+                    f"failures (venue {idx}/{len(venues)}).\n"
+                    f"       Everything scanned so far has been saved. Wolt blocks by IP for a while \u2014\n"
+                    f"       wait ~15\u201330 minutes, then resume exactly where you left off with:\n"
+                    f"         python3 wolt_analyzer.py \"{args.address}\" --token \"<fresh __wrtoken>\" --resume\n"
+                    f"       (Use a FRESH __wrtoken if the current one has rotated.)"
+                )
+                break
+    
+        # ------------------------------------------------------------------
+        # Post-run retry pass: re-fetch venues whose pricing is blank (429s)
+        # ------------------------------------------------------------------
+        failed_indices = [i for i, r in enumerate(rows) if not r.get("service_fee_pct")]
+        if failed_indices and not rate_limited_stop:
+            print(f"[RETRY] {len(failed_indices)} venue(s) missing pricing data; "
+                  f"waiting 30s before retry ...")
+            time.sleep(30.0)
+            for i in failed_indices:
+                row  = rows[i]
+                slug = row["slug"]
+                name = row["restaurant_name"]
+                print(f"  [RETRY] {name} ({slug}) ...")
+                time.sleep(random.uniform(1.5, 2.5))
+    
+                venue_match = next((v for v in venues if v.get("slug") == slug), None)
+                if venue_match is None:
+                    continue
+    
+                loc_r  = venue_match.get("location", [None, None])
+                v_lon_r = loc_r[0] if isinstance(loc_r, (list, tuple)) and len(loc_r) == 2 else None
+                v_lat_r = loc_r[1] if isinstance(loc_r, (list, tuple)) and len(loc_r) == 2 else None
+                hav_dist_r = (haversine(lat, lon, float(v_lat_r), float(v_lon_r))
+                              if v_lat_r is not None else 0)
+    
+                data2 = fetch_dynamic_pricing(slug, lat, lon, auth_headers)
+                if data2 is None:
+                    print(f"    [RETRY] Still failed for {name}; keeping blank row.")
+                    continue
+    
+                pricing2 = extract_pricing(data2)
+                odp2 = _get_original_delivery_price(data2)
+                if odp2 is not None:
+                    pricing2["delivery_fee_eur"]    = f"{odp2 / 100:.2f}"
+                else:
+                    bp2, dr2, src2 = _get_delivery_pricing_for_fallback(data2)
+                    if dr2:
+                        fc2 = _compute_fallback_delivery_fee(bp2, dr2, hav_dist_r)
+                        pricing2["delivery_fee_eur"]    = f"{fc2 / 100:.2f}"
+                    else:
+                        fb2 = venue_match.get("delivery_price_int", 0) or 0
+                        pricing2["delivery_fee_eur"]    = f"{fb2 / 100:.2f}"
+    
+                if pricing2.get("service_fee_pct"):
+                    restaurants_scanned += 1
+    
+                rows[i] = build_row(venue_match, pricing2, lat, lon)
+                print(
+                    f"    [RETRY] OK: fee=EUR{pricing2['delivery_fee_eur']}"
+                    f"  svc={pricing2.get('service_fee_pct', '?')}%"
+                    f"  svc_min=EUR{pricing2.get('service_fee_min_eur', '?')}"
+                    f"  svc_max=EUR{pricing2.get('service_fee_max_eur', '?')}"
+                )
+    
+        # ── Export CSV ───────────────────────────────────────────────────────────
+        # Merge checkpoint rows (from --resume) with newly scanned rows, then export
+        all_rows = resumed_rows + rows
+        export_csv(all_rows, csv_path)
+        print(f"\nDone! {len(all_rows)} restaurants -> {csv_path}")
+    
+        # ── Write Markdown run log ───────────────────────────────────────────────
+        success_rate = (restaurants_scanned / restaurants_requested * 100
+                        if restaurants_requested > 0 else 0.0)
+        log_dt_str = run_dt.strftime("%Y-%m-%d %H:%M:%S")
+        md_content = (
+            f"# Wolt Pricing Scraper — Run Log\n\n"
+            f"| Field | Value |\n"
+            f"|---|---|\n"
+            f"| **Run date/time** | {log_dt_str} |\n"
+            f"| **Input address** | {args.address} |\n"
+            f"| **Resolved city** | {city} |\n"
+            f"| **Coordinates** | lat={lat:.6f}, lon={lon:.6f} |\n"
+            f"| **Auth status** | {auth_status} |\n"
+            f"| **Restaurants available** | {restaurants_available} |\n"
+            f"| **Restaurants requested** | {restaurants_requested} |\n"
+            f"| **Restaurants scanned** | {restaurants_scanned} |\n"
+            f"| **Success rate** | {success_rate:.1f}% |\n"
+            f"| **Run status** | {'STOPPED (rate-limited \u2014 resume with --resume)' if rate_limited_stop else 'COMPLETE'} |\n"
+            f"| **Venues skipped via --resume** | {venues_skipped_resume} |\n"
+            f"| **CSV file** | {csv_filename} |\n"
+        )
+        with open(log_path, "w", encoding="utf-8") as fh:
+            fh.write(md_content)
+        print(f"Run log -> {log_path}")
 
+        # -- Auto-resume loop control ----------------------------------------
+        if not rate_limited_stop:
+            if args.auto_resume:
+                print("[auto-resume] Run complete.")
+            break
+        if args.auto_resume and _auto_cycle < _auto_max:
             print(
-                f"    hav={hav_dist}m  fee=EUR{pricing['delivery_fee_eur']}"
-                f"  svc={pricing.get('service_fee_pct', '?')}%"
-                f"  svc_min=EUR{pricing.get('service_fee_min_eur', '?')}"
-                f"  svc_max=EUR{pricing.get('service_fee_max_eur', '?')}"
+                f"[auto-resume] Rate limiter tripped "
+                f"(cycle {_auto_cycle}/{_auto_max}). "
+                f"Waiting {_auto_wait} min, then resuming ..."
             )
-            if pricing.get("service_fee_pct"):
-                restaurants_scanned += 1
-
-        rows.append(build_row(venue, pricing, lat, lon))
-
-        # Checkpoint: persist each successfully fetched row so --resume can skip it
-        if data is not None:
-            with open(partial_path, "a", encoding="utf-8") as _cpfh:
-                _cpfh.write(json.dumps(rows[-1]) + "\n")
-
-        # Graceful stop: when consecutive failures hit the threshold, the per-IP
-        # rate limiter has almost certainly tripped; stop cleanly so everything
-        # saved so far is intact and the user can resume later.
-        if consec_failures >= cooldown_threshold:
-            rate_limited_stop = True
-            print(
-                f"\n[STOP] Wolt's rate limiter has tripped after {consec_failures} consecutive "
-                f"failures (venue {idx}/{len(venues)}).\n"
-                f"       Everything scanned so far has been saved. Wolt blocks by IP for a while \u2014\n"
-                f"       wait ~15\u201330 minutes, then resume exactly where you left off with:\n"
-                f"         python3 wolt_analyzer.py \"{args.address}\" --token \"<fresh __wrtoken>\" --resume\n"
-                f"       (Use a FRESH __wrtoken if the current one has rotated.)"
-            )
+            time.sleep(_auto_wait * 60)
+        else:
+            if args.auto_resume:
+                print("[auto-resume] Max cycles reached; "
+                      "partial data saved. Re-run later with --resume.")
             break
 
-    # ------------------------------------------------------------------
-    # Post-run retry pass: re-fetch venues whose pricing is blank (429s)
-    # ------------------------------------------------------------------
-    failed_indices = [i for i, r in enumerate(rows) if not r.get("service_fee_pct")]
-    if failed_indices and not rate_limited_stop:
-        print(f"[RETRY] {len(failed_indices)} venue(s) missing pricing data; "
-              f"waiting 30s before retry ...")
-        time.sleep(30.0)
-        for i in failed_indices:
-            row  = rows[i]
-            slug = row["slug"]
-            name = row["restaurant_name"]
-            print(f"  [RETRY] {name} ({slug}) ...")
-            time.sleep(random.uniform(1.5, 2.5))
-
-            venue_match = next((v for v in venues if v.get("slug") == slug), None)
-            if venue_match is None:
-                continue
-
-            loc_r  = venue_match.get("location", [None, None])
-            v_lon_r = loc_r[0] if isinstance(loc_r, (list, tuple)) and len(loc_r) == 2 else None
-            v_lat_r = loc_r[1] if isinstance(loc_r, (list, tuple)) and len(loc_r) == 2 else None
-            hav_dist_r = (haversine(lat, lon, float(v_lat_r), float(v_lon_r))
-                          if v_lat_r is not None else 0)
-
-            data2 = fetch_dynamic_pricing(slug, lat, lon, auth_headers)
-            if data2 is None:
-                print(f"    [RETRY] Still failed for {name}; keeping blank row.")
-                continue
-
-            pricing2 = extract_pricing(data2)
-            odp2 = _get_original_delivery_price(data2)
-            if odp2 is not None:
-                pricing2["delivery_fee_eur"]    = f"{odp2 / 100:.2f}"
-            else:
-                bp2, dr2, src2 = _get_delivery_pricing_for_fallback(data2)
-                if dr2:
-                    fc2 = _compute_fallback_delivery_fee(bp2, dr2, hav_dist_r)
-                    pricing2["delivery_fee_eur"]    = f"{fc2 / 100:.2f}"
-                else:
-                    fb2 = venue_match.get("delivery_price_int", 0) or 0
-                    pricing2["delivery_fee_eur"]    = f"{fb2 / 100:.2f}"
-
-            if pricing2.get("service_fee_pct"):
-                restaurants_scanned += 1
-
-            rows[i] = build_row(venue_match, pricing2, lat, lon)
-            print(
-                f"    [RETRY] OK: fee=EUR{pricing2['delivery_fee_eur']}"
-                f"  svc={pricing2.get('service_fee_pct', '?')}%"
-                f"  svc_min=EUR{pricing2.get('service_fee_min_eur', '?')}"
-                f"  svc_max=EUR{pricing2.get('service_fee_max_eur', '?')}"
-            )
-
-    # ── Export CSV ───────────────────────────────────────────────────────────
-    # Merge checkpoint rows (from --resume) with newly scanned rows, then export
-    all_rows = resumed_rows + rows
-    export_csv(all_rows, csv_path)
-    print(f"\nDone! {len(all_rows)} restaurants -> {csv_path}")
-
-    # ── Write Markdown run log ───────────────────────────────────────────────
-    success_rate = (restaurants_scanned / restaurants_requested * 100
-                    if restaurants_requested > 0 else 0.0)
-    log_dt_str = run_dt.strftime("%Y-%m-%d %H:%M:%S")
-    md_content = (
-        f"# Wolt Pricing Scraper — Run Log\n\n"
-        f"| Field | Value |\n"
-        f"|---|---|\n"
-        f"| **Run date/time** | {log_dt_str} |\n"
-        f"| **Input address** | {args.address} |\n"
-        f"| **Resolved city** | {city} |\n"
-        f"| **Coordinates** | lat={lat:.6f}, lon={lon:.6f} |\n"
-        f"| **Auth status** | {auth_status} |\n"
-        f"| **Restaurants available** | {restaurants_available} |\n"
-        f"| **Restaurants requested** | {restaurants_requested} |\n"
-        f"| **Restaurants scanned** | {restaurants_scanned} |\n"
-        f"| **Success rate** | {success_rate:.1f}% |\n"
-        f"| **Run status** | {'STOPPED (rate-limited \u2014 resume with --resume)' if rate_limited_stop else 'COMPLETE'} |\n"
-        f"| **Venues skipped via --resume** | {venues_skipped_resume} |\n"
-        f"| **CSV file** | {csv_filename} |\n"
-    )
-    with open(log_path, "w", encoding="utf-8") as fh:
-        fh.write(md_content)
-    print(f"Run log -> {log_path}")
 
 
 if __name__ == "__main__":
