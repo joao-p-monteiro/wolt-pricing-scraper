@@ -631,6 +631,13 @@ def parse_args():
     parser.add_argument("--limit",  type=int, default=None)
     parser.add_argument("--lat",    type=float, default=None)
     parser.add_argument("--lon",    type=float, default=None)
+    # -- Resilience args (added: adaptive cooldown + checkpoint/resume) --
+    parser.add_argument("--resume",         action="store_true", default=False,
+                        help="Resume from .partial.jsonl checkpoint (skip already-scanned venues)")
+    parser.add_argument("--cooldown-after", type=int,   default=3,
+                        help="Consecutive venue failures before triggering adaptive cooldown (default 3)")
+    parser.add_argument("--cooldown-secs",  type=int,   default=90,
+                        help="Base cooldown duration in seconds when rate limiter trips (default 90)")
     return parser.parse_args()
 
 
@@ -677,7 +684,8 @@ def main():
     os.makedirs(folder, exist_ok=True)
     csv_filename = f"{base_name}.csv"
     csv_path = os.path.join(folder, csv_filename)
-    log_path  = os.path.join(folder, f"{base_name}_log.md")
+    log_path     = os.path.join(folder, f"{base_name}_log.md")
+    partial_path = os.path.join(folder, f"{base_name}.partial.jsonl")  # checkpoint file
 
     # ── Fetch listings ───────────────────────────────────────────────────────
     print("Fetching restaurant listings ...")
@@ -690,15 +698,43 @@ def main():
         venues = venues[:args.limit]
     restaurants_requested = len(venues)
 
+    # -- Checkpoint / resume -----------------------------------------------
+    resumed_rows          = []       # rows already done in a previous run
+    resumed_slugs         = set()
+    venues_skipped_resume = 0
+    if args.resume and os.path.exists(partial_path):
+        with open(partial_path, "r", encoding="utf-8") as _fh:
+            for _line in _fh:
+                _line = _line.strip()
+                if _line:
+                    _obj = json.loads(_line)
+                    resumed_rows.append(_obj)
+                    resumed_slugs.add(_obj.get("slug", ""))
+        venues_skipped_resume = len(resumed_slugs)
+        if venues_skipped_resume:
+            print(f"[resume] Skipping {venues_skipped_resume} already-scanned venues "
+                  f"from checkpoint.")
+            venues = [v for v in venues if v.get("slug") not in resumed_slugs]
+
     rows = []
     restaurants_scanned = 0
+
+    # -- Adaptive cooldown state -------------------------------------------
+    consec_failures     = 0                    # consecutive venue-level failures
+    cooldowns_triggered = 0                    # total cooldown events this run
+    cooldown_base       = args.cooldown_secs   # escalates: base -> 2x -> 300s
+    cooldown_threshold  = args.cooldown_after  # failures before triggering cooldown
+    cooldown_dur        = cooldown_base        # current cooldown duration (updated per event)
+
     for idx, venue in enumerate(venues, start=1):
         name = venue.get("name", venue.get("slug", "?"))
         print(f"  [{idx}/{len(venues)}] {name} ...")
         time.sleep(random.uniform(1.5, 2.5))
         if idx % 10 == 0:
-            print(f"    [throttle] Extra 3s pause after venue {idx} ...")
-            time.sleep(3.0)
+            # Scale up periodic pause for large runs (>200 venues) to ease rate-limit pressure
+            _extra = 5.0 if len(venues) > 200 else 3.0
+            print(f"    [throttle] Extra {_extra:.0f}s pause after venue {idx} ...")
+            time.sleep(_extra)
 
         loc = venue.get("location", [None, None])
         venue_lon_val = loc[0] if isinstance(loc, (list, tuple)) and len(loc) == 2 else None
@@ -707,6 +743,12 @@ def main():
                     if venue_lat_val is not None else 0)
 
         data = fetch_dynamic_pricing(venue["slug"], lat, lon, auth_headers)
+
+        # Track consecutive failures to drive the adaptive cooldown below
+        if data is None:
+            consec_failures += 1
+        else:
+            consec_failures = 0
 
         if data is None:
             pricing = {
@@ -745,12 +787,39 @@ def main():
 
         rows.append(build_row(venue, pricing, lat, lon))
 
+        # Checkpoint: persist each successfully fetched row so --resume can skip it
+        if data is not None:
+            with open(partial_path, "a", encoding="utf-8") as _cpfh:
+                _cpfh.write(json.dumps(rows[-1]) + "\n")
+
+        # Adaptive global cooldown: when consecutive failures hit the threshold,
+        # the per-IP rate limiter has almost certainly tripped; sleep long and
+        # CONTINUE (do not abort) so the tail of the run can still succeed.
+        if consec_failures >= cooldown_threshold:
+            cooldowns_triggered += 1
+            if cooldowns_triggered == 1:
+                cooldown_dur = cooldown_base             # e.g. 90 s
+            elif cooldowns_triggered == 2:
+                cooldown_dur = min(cooldown_base * 2, 300)  # e.g. 180 s
+            else:
+                cooldown_dur = 300                       # cap at 300 s
+            print(
+                f"[cooldown] Rate limiter likely tripped after {consec_failures} consecutive "
+                f"failures — pausing {cooldown_dur}s to let it reset ..."
+            )
+            time.sleep(cooldown_dur)
+            consec_failures = 0  # reset counter after cooldown; keep looping
+
     # ------------------------------------------------------------------
     # Post-run retry pass: re-fetch venues whose pricing is blank (429s)
     # ------------------------------------------------------------------
     failed_indices = [i for i, r in enumerate(rows) if not r.get("service_fee_pct")]
     if failed_indices:
-        print(f"\n[RETRY] {len(failed_indices)} venue(s) missing pricing data; "
+        # Single long cooldown so the rate limiter fully resets before the retry pass
+        print(f"\n[RETRY-COOLDOWN] {len(failed_indices)} venue(s) need retry; "
+              f"pausing {cooldown_dur}s to let the rate limiter reset ...")
+        time.sleep(cooldown_dur)
+        print(f"[RETRY] {len(failed_indices)} venue(s) missing pricing data; "
               f"waiting 30s before retry ...")
         time.sleep(30.0)
         for i in failed_indices:
@@ -800,8 +869,10 @@ def main():
             )
 
     # ── Export CSV ───────────────────────────────────────────────────────────
-    export_csv(rows, csv_path)
-    print(f"\nDone! {len(rows)} restaurants -> {csv_path}")
+    # Merge checkpoint rows (from --resume) with newly scanned rows, then export
+    all_rows = resumed_rows + rows
+    export_csv(all_rows, csv_path)
+    print(f"\nDone! {len(all_rows)} restaurants -> {csv_path}")
 
     # ── Write Markdown run log ───────────────────────────────────────────────
     success_rate = (restaurants_scanned / restaurants_requested * 100
@@ -820,6 +891,8 @@ def main():
         f"| **Restaurants requested** | {restaurants_requested} |\n"
         f"| **Restaurants scanned** | {restaurants_scanned} |\n"
         f"| **Success rate** | {success_rate:.1f}% |\n"
+        f"| **Cooldowns triggered** | {cooldowns_triggered} |\n"
+        f"| **Venues skipped via --resume** | {venues_skipped_resume} |\n"
         f"| **CSV file** | {csv_filename} |\n"
     )
     with open(log_path, "w", encoding="utf-8") as fh:
